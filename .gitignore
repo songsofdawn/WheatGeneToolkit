@@ -1,28 +1,46 @@
-# 原始大数据库，不上传 GitHub
+# Large local database bundle not intended for GitHub
 wheat_toolkit.db
 
-# SQLite 临时文件
+# SQLite runtime files
 *.db-journal
 *.db-wal
 *.db-shm
 
-# Python 缓存
+# Python cache and build artifacts
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
 
-# 虚拟环境
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# 系统文件
+# Streamlit local secrets and overrides
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
 Thumbs.db
-
-# Streamlit secrets
-.streamlit/secrets.toml
-
-# 辅助脚本
-scripts/
-
