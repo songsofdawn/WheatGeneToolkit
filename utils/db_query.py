@@ -3,6 +3,7 @@
 import json
 import re
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Any
 
@@ -18,6 +19,21 @@ DB_DIR = PROJECT_ROOT / "data" / "db"
 MANIFEST_FILE = DB_DIR / "manifest.json"
 
 
+def _get_file_cache_key(path: Path) -> tuple[str, int, int]:
+    """
+    Build a cache key that invalidates automatically when a file changes.
+    """
+    resolved = path.resolve()
+    stat = resolved.stat()
+    return str(resolved), stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=1)
+def _load_manifest_cached(path_str: str, _mtime_ns: int, _size: int) -> dict:
+    with Path(path_str).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def _load_manifest() -> dict:
     """
     读取 data/db/manifest.json。
@@ -28,8 +44,7 @@ def _load_manifest() -> dict:
             f"请确认你已经完成数据库拆分，并且 data/db/manifest.json 存在。"
         )
 
-    with MANIFEST_FILE.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return _load_manifest_cached(*_get_file_cache_key(MANIFEST_FILE))
 
 
 MANIFEST = _load_manifest()
@@ -103,6 +118,21 @@ def _connect_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.execute("PRAGMA query_only = ON")
     return conn
+
+
+@lru_cache(maxsize=2048)
+def _read_sql_query_cached(
+    db_path_str: str,
+    _mtime_ns: int,
+    _size: int,
+    sql: str,
+    params: tuple,
+) -> pd.DataFrame:
+    conn = _connect_db(Path(db_path_str))
+    try:
+        return pd.read_sql_query(sql, conn, params=params)
+    finally:
+        conn.close()
 
 
 def get_connection(db_file: Optional[str] = None) -> sqlite3.Connection:
@@ -195,12 +225,11 @@ def _fetch_df(
     通用查询函数，自动根据 table/gene_id 路由到正确的小数据库。
     """
     db_path = _get_table_db_path(table, gene_id_for_route)
-    conn = _connect_db(db_path)
-
-    try:
-        return pd.read_sql_query(sql, conn, params=params)
-    finally:
-        conn.close()
+    return _read_sql_query_cached(
+        *_get_file_cache_key(db_path),
+        sql,
+        tuple(params),
+    ).copy()
 
 
 # ============================================================

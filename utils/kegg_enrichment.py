@@ -19,11 +19,28 @@ data/kegg_mapping/
 
 import io
 import textwrap
+from functools import lru_cache
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from scipy.stats import hypergeom
+
+
+def _get_file_cache_key(path: str) -> tuple[str, int, int]:
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    return str(resolved), stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=16)
+def _read_tsv_cached(path_str: str, _mtime_ns: int, _size: int) -> pd.DataFrame:
+    return pd.read_csv(path_str, sep="\t", dtype=str)
+
+
+def _read_tsv(path: str) -> pd.DataFrame:
+    return _read_tsv_cached(*_get_file_cache_key(path)).copy()
 
 
 # ==============================
@@ -126,7 +143,7 @@ def load_gene2ko(gene2ko_path):
     Traes...   K16284
     """
 
-    df = pd.read_csv(gene2ko_path, sep="\t", dtype=str)
+    df = _read_tsv(gene2ko_path)
 
     required_cols = {"gene_id", "ko_list"}
     if not required_cols.issubset(set(df.columns)):
@@ -168,8 +185,8 @@ def load_kegg_mapping(ko2pathway_path, pathway2name_path):
         ko00010     Glycolysis / Gluconeogenesis
     """
 
-    ko2pathway = pd.read_csv(ko2pathway_path, sep="\t", dtype=str)
-    pathway2name = pd.read_csv(pathway2name_path, sep="\t", dtype=str)
+    ko2pathway = _read_tsv(ko2pathway_path)
+    pathway2name = _read_tsv(pathway2name_path)
 
     required_cols_1 = {"KO", "pathway"}
     required_cols_2 = {"pathway", "Description"}

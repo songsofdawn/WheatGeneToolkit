@@ -1,11 +1,28 @@
 import io
 import math
+from functools import lru_cache
+from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import hypergeom
 from statsmodels.stats.multitest import multipletests
+
+
+def _get_file_cache_key(path: str) -> tuple[str, int, int]:
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    return str(resolved), stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=16)
+def _read_tsv_cached(path_str: str, _mtime_ns: int, _size: int) -> pd.DataFrame:
+    return pd.read_csv(path_str, sep="\t", dtype=str)
+
+
+def _read_tsv(path: str) -> pd.DataFrame:
+    return _read_tsv_cached(*_get_file_cache_key(path)).copy()
 
 
 def normalize_gene_list(gene_list: List[str]) -> List[str]:
@@ -21,7 +38,7 @@ def normalize_gene_list(gene_list: List[str]) -> List[str]:
 
 
 def load_term2gene(term2gene_path: str) -> pd.DataFrame:
-    df = pd.read_csv(term2gene_path, sep="\t", dtype=str)
+    df = _read_tsv(term2gene_path)
     expected = {"go_id", "gene_id"}
     if not expected.issubset(df.columns):
         raise ValueError(f"{term2gene_path} 必须包含列: {expected}")
@@ -29,7 +46,7 @@ def load_term2gene(term2gene_path: str) -> pd.DataFrame:
 
 
 def load_term2name(term2name_path: str) -> pd.DataFrame:
-    df = pd.read_csv(term2name_path, sep="\t", dtype=str)
+    df = _read_tsv(term2name_path)
     expected = {"go_id", "go_term_name"}
     if not expected.issubset(df.columns):
         raise ValueError(f"{term2name_path} 必须包含列: {expected}")
@@ -37,7 +54,7 @@ def load_term2name(term2name_path: str) -> pd.DataFrame:
 
 
 def load_go_metadata(metadata_path: str) -> pd.DataFrame:
-    df = pd.read_csv(metadata_path, sep="\t", dtype=str)
+    df = _read_tsv(metadata_path)
     expected = {"go_id", "ontology"}
     if not expected.issubset(df.columns):
         raise ValueError(f"{metadata_path} 必须包含列: {expected}")
@@ -46,7 +63,7 @@ def load_go_metadata(metadata_path: str) -> pd.DataFrame:
 
 
 def load_background_genes(background_path: str) -> Set[str]:
-    df = pd.read_csv(background_path, sep="\t", dtype=str)
+    df = _read_tsv(background_path)
     if "gene_id" not in df.columns:
         raise ValueError(f"{background_path} 必须包含列: gene_id")
     return set(df["gene_id"].dropna().astype(str))
