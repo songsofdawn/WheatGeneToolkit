@@ -2,23 +2,107 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    # GitHub Actions 默认按 UTC 时间运行
+    # 每 4 小时 ping 一次，并在 30 分钟后做一次备用 ping
+    # 避开整点，降低 GitHub hosted runner 排队/丢任务概率
+    - cron: "17 */4 * * *"
+    - cron: "47 */4 * * *"
+
   workflow_dispatch:
+
+concurrency:
+  group: keep-streamlit-awake
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - name: Ping Streamlit app
+        shell: bash
         run: |
-          echo "Ping time: $(date -u)"
-          curl -A "Mozilla/5.0" \
-            --silent \
-            --show-error \
-            --max-time 120 \
-            --connect-timeout 20 \
-            --retry 3 \
-            --retry-delay 10 \
-            -w "\nHTTP status: %{http_code}\nFinal URL: %{url_effective}\n" \
-            "https://wheatgenesoperation-96yfkzyzehlld67vb4vd3c.streamlit.app/_stcore/health"
-          echo "Ping finished."
+          set -u
+
+          APP_URL="https://wheatgenesoperation-96yfkzyzehlld67vb4vd3c.streamlit.app"
+          BODY_FILE="/tmp/streamlit_ping_body.txt"
+
+          echo "===================================="
+          echo "Ping time UTC: $(date -u)"
+          echo "Target app: $APP_URL"
+          echo "===================================="
+
+          check_url() {
+            local url="$1"
+
+            echo ""
+            echo "------------------------------------"
+            echo "Pinging: $url"
+            echo "------------------------------------"
+
+            http_code=$(curl -L \
+              -A "Mozilla/5.0 (GitHub Actions Streamlit keepalive)" \
+              -H "Cache-Control: no-cache" \
+              --silent \
+              --show-error \
+              --connect-timeout 30 \
+              --max-time 180 \
+              --retry 5 \
+              --retry-delay 15 \
+              --retry-all-errors \
+              -o "$BODY_FILE" \
+              -w "%{http_code}" \
+              "$url" || true)
+
+            echo "HTTP status: $http_code"
+            echo "Response preview:"
+            head -c 800 "$BODY_FILE" || true
+            echo ""
+            echo ""
+
+            # 如果返回的是 Streamlit 睡眠页，说明普通 curl 不一定能真正唤醒
+            if grep -Eiq "gone to sleep|Zzzz|Yes, get this app back up|This app has gone to sleep" "$BODY_FILE"; then
+              echo "Detected Streamlit sleeping page."
+              echo "This means the app is already asleep. Please wake it manually once, then this workflow can keep it alive."
+              return 1
+            fi
+
+            # 如果返回的是资源错误页，也标记失败，方便你看到红叉
+            if grep -Eiq "Oh no|resource limits|Error running your app" "$BODY_FILE"; then
+              echo "Detected Streamlit error/resource-limit page."
+              return 1
+            fi
+
+            # 2xx / 3xx 都认为访问成功
+            if [[ "$http_code" =~ ^2|^3 ]]; then
+              echo "Ping OK: $url"
+              return 0
+            fi
+
+            echo "Ping failed for: $url"
+            return 1
+          }
+
+          # 先访问主页，更像真实用户访问，更适合保活
+          if check_url "${APP_URL}/?keepalive=$(date +%s)"; then
+            echo "Homepage ping succeeded."
+            echo "Ping finished."
+            exit 0
+          fi
+
+          echo "Homepage ping did not succeed. Wait 30 seconds, then try health endpoint..."
+          sleep 30
+
+          # 再访问 Streamlit health endpoint
+          if check_url "${APP_URL}/_stcore/health"; then
+            echo "Health endpoint ping succeeded."
+            echo "Ping finished."
+            exit 0
+          fi
+
+          echo "All ping attempts failed."
+          exit 1
