@@ -2,9 +2,8 @@ name: Keep Streamlit App Awake
 
 on:
   schedule:
-    # GitHub Actions 默认按 UTC 时间运行
-    # 每 4 小时 ping 一次，并在 30 分钟后做一次备用 ping
-    # 避开整点，降低 GitHub hosted runner 排队/丢任务概率
+    # GitHub Actions uses UTC time.
+    # Run every 4 hours, then run a backup attempt 30 minutes later.
     - cron: "17 */4 * * *"
     - cron: "47 */4 * * *"
 
@@ -18,91 +17,267 @@ permissions:
   contents: read
 
 jobs:
-  ping:
+  wake:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
-      - name: Ping Streamlit app
+      - name: Install Playwright
         shell: bash
         run: |
-          set -u
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install chromium
 
-          APP_URL="https://wheatgenesoperation-96yfkzyzehlld67vb4vd3c.streamlit.app"
-          BODY_FILE="/tmp/streamlit_ping_body.txt"
+      - name: Wake or keep Streamlit app alive
+        shell: bash
+        env:
+          APP_URL: "https://wheatgenesoperation-96yfkzyzehlld67vb4vd3c.streamlit.app"
+        run: |
+          cat > wake_streamlit.py <<'PY'
+          import os
+          import sys
+          import time
 
-          echo "===================================="
-          echo "Ping time UTC: $(date -u)"
-          echo "Target app: $APP_URL"
-          echo "===================================="
+          from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+          from playwright.sync_api import sync_playwright
 
-          check_url() {
-            local url="$1"
 
-            echo ""
-            echo "------------------------------------"
-            echo "Pinging: $url"
-            echo "------------------------------------"
+          APP_URL = os.environ["APP_URL"].rstrip("/")
+          HEALTH_URL = f"{APP_URL}/_stcore/health"
 
-            http_code=$(curl -L \
-              -A "Mozilla/5.0 (GitHub Actions Streamlit keepalive)" \
-              -H "Cache-Control: no-cache" \
-              --silent \
-              --show-error \
-              --connect-timeout 30 \
-              --max-time 180 \
-              --retry 5 \
-              --retry-delay 15 \
-              --retry-all-errors \
-              -o "$BODY_FILE" \
-              -w "%{http_code}" \
-              "$url" || true)
+          SLEEP_KEYWORDS = [
+              "This app has gone to sleep",
+              "has gone to sleep",
+              "Yes, get this app back up",
+              "Get this app back up",
+              "Zzzz",
+          ]
 
-            echo "HTTP status: $http_code"
-            echo "Response preview:"
-            head -c 800 "$BODY_FILE" || true
-            echo ""
-            echo ""
+          ERROR_KEYWORDS = [
+              "Oh no",
+              "Error running your app",
+              "resource limits",
+              "ModuleNotFoundError",
+              "Traceback",
+          ]
 
-            # 如果返回的是 Streamlit 睡眠页，说明普通 curl 不一定能真正唤醒
-            if grep -Eiq "gone to sleep|Zzzz|Yes, get this app back up|This app has gone to sleep" "$BODY_FILE"; then
-              echo "Detected Streamlit sleeping page."
-              echo "This means the app is already asleep. Please wake it manually once, then this workflow can keep it alive."
-              return 1
-            fi
 
-            # 如果返回的是资源错误页，也标记失败，方便你看到红叉
-            if grep -Eiq "Oh no|resource limits|Error running your app" "$BODY_FILE"; then
-              echo "Detected Streamlit error/resource-limit page."
-              return 1
-            fi
+          def log(message):
+              print(message, flush=True)
 
-            # 2xx / 3xx 都认为访问成功
-            if [[ "$http_code" =~ ^2|^3 ]]; then
-              echo "Ping OK: $url"
-              return 0
-            fi
 
-            echo "Ping failed for: $url"
-            return 1
-          }
+          def contains_any(text, keywords):
+              text_lower = text.lower()
+              return any(keyword.lower() in text_lower for keyword in keywords)
 
-          # 先访问主页，更像真实用户访问，更适合保活
-          if check_url "${APP_URL}/?keepalive=$(date +%s)"; then
-            echo "Homepage ping succeeded."
-            echo "Ping finished."
-            exit 0
-          fi
 
-          echo "Homepage ping did not succeed. Wait 30 seconds, then try health endpoint..."
-          sleep 30
+          def get_body_text(page, timeout=30000):
+              try:
+                  return page.locator("body").inner_text(timeout=timeout)
+              except Exception as exc:
+                  log(f"[WARN] Failed to read body text: {exc}")
+                  return ""
 
-          # 再访问 Streamlit health endpoint
-          if check_url "${APP_URL}/_stcore/health"; then
-            echo "Health endpoint ping succeeded."
-            echo "Ping finished."
-            exit 0
-          fi
 
-          echo "All ping attempts failed."
-          exit 1
+          def print_preview(text, title="Page text preview", limit=1500):
+              log("")
+              log("=" * 60)
+              log(title)
+              log("=" * 60)
+              log(text[:limit] if text else "[empty body text]")
+              log("=" * 60)
+              log("")
+
+
+          def safe_keepalive_interaction(page):
+              """Use harmless interactions so app widgets are not triggered."""
+              log("[INFO] App does not look asleep. Running safe keepalive interactions...")
+
+              try:
+                  page.mouse.move(200, 200)
+                  time.sleep(1)
+                  page.mouse.move(500, 400)
+                  time.sleep(1)
+              except Exception as exc:
+                  log(f"[WARN] Mouse move failed: {exc}")
+
+              try:
+                  page.locator("body").click(position={"x": 20, "y": 20}, timeout=10000)
+                  log("[INFO] Clicked body area safely.")
+              except Exception as exc:
+                  log(f"[WARN] Body click failed: {exc}")
+
+              try:
+                  page.mouse.wheel(0, 800)
+                  time.sleep(1)
+                  page.mouse.wheel(0, -400)
+                  time.sleep(1)
+                  log("[INFO] Scrolled page safely.")
+              except Exception as exc:
+                  log(f"[WARN] Scroll failed: {exc}")
+
+              time.sleep(10)
+
+
+          def try_click_wake_button(page):
+              log("[INFO] Trying to click Streamlit wake-up button...")
+
+              for text in ["Yes, get this app back up", "Get this app back up", "Wake up", "wake"]:
+                  try:
+                      locator = page.get_by_text(text, exact=False)
+                      if locator.count() > 0:
+                          locator.first.click(timeout=30000)
+                          log(f"[INFO] Clicked wake button by text: {text}")
+                          return True
+                  except Exception as exc:
+                      log(f"[WARN] Failed wake-button candidate '{text}': {exc}")
+
+              try:
+                  buttons = page.locator("button")
+                  count = buttons.count()
+                  log(f"[INFO] Found {count} button(s) on page.")
+
+                  for index in range(count):
+                      button = buttons.nth(index)
+                      button_text = button.inner_text(timeout=5000)
+                      log(f"[INFO] Button {index}: {button_text}")
+
+                      if "get this app back up" in button_text.lower() or "wake" in button_text.lower():
+                          button.click(timeout=30000)
+                          log(f"[INFO] Clicked wake button index: {index}")
+                          return True
+              except Exception as exc:
+                  log(f"[WARN] Button fallback failed: {exc}")
+
+              return False
+
+
+          def check_health(page):
+              log(f"[INFO] Checking health endpoint: {HEALTH_URL}")
+
+              try:
+                  response = page.goto(HEALTH_URL, wait_until="domcontentloaded", timeout=120000)
+                  status = response.status if response else None
+                  text = get_body_text(page, timeout=15000)
+
+                  log(f"[INFO] Health HTTP status: {status}")
+                  print_preview(text, title="Health endpoint preview", limit=500)
+
+                  return bool(status and 200 <= status < 400)
+              except Exception as exc:
+                  log(f"[WARN] Health check failed: {exc}")
+                  return False
+
+
+          def open_homepage(page):
+              url = f"{APP_URL}/?keepalive={int(time.time())}"
+              response = page.goto(url, wait_until="domcontentloaded", timeout=180000)
+              status = response.status if response else None
+              log(f"[INFO] Initial HTTP status: {status}")
+              log(f"[INFO] Current URL after navigation: {page.url}")
+              time.sleep(15)
+              return get_body_text(page)
+
+
+          with sync_playwright() as playwright:
+              browser = playwright.chromium.launch(
+                  headless=True,
+                  args=["--no-sandbox", "--disable-dev-shm-usage"],
+              )
+              context = browser.new_context(
+                  user_agent=(
+                      "Mozilla/5.0 (X11; Linux x86_64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/120.0.0.0 Safari/537.36"
+                  ),
+                  viewport={"width": 1365, "height": 900},
+              )
+              page = context.new_page()
+
+              try:
+                  log("=" * 60)
+                  log(f"[INFO] Opening Streamlit app: {APP_URL}")
+                  log("=" * 60)
+
+                  text = open_homepage(page)
+                  print_preview(text, title="Initial page text preview")
+
+                  if contains_any(text, ERROR_KEYWORDS):
+                      log("[ERROR] Streamlit error page detected.")
+                      sys.exit(1)
+
+                  if contains_any(text, SLEEP_KEYWORDS):
+                      log("[INFO] Detected Streamlit sleeping page.")
+
+                      if not try_click_wake_button(page):
+                          log("[ERROR] Sleeping page detected, but wake button was not clicked.")
+                          sys.exit(1)
+
+                      log("[INFO] Wake button clicked. Waiting for app to start...")
+
+                      for seconds in [30, 30, 30, 30]:
+                          time.sleep(seconds)
+                          log(f"[INFO] Waited another {seconds} seconds. Checking page...")
+
+                          try:
+                              page.reload(wait_until="domcontentloaded", timeout=120000)
+                              time.sleep(10)
+                          except Exception as exc:
+                              log(f"[WARN] Reload during wake check failed: {exc}")
+
+                          text = get_body_text(page)
+                          print_preview(text, title="Page text after wake attempt", limit=1000)
+
+                          if contains_any(text, ERROR_KEYWORDS):
+                              log("[ERROR] Error page detected after wake attempt.")
+                              sys.exit(1)
+
+                          if not contains_any(text, SLEEP_KEYWORDS):
+                              log("[INFO] App no longer looks asleep.")
+                              break
+
+                      final_text = get_body_text(page)
+
+                      if contains_any(final_text, SLEEP_KEYWORDS):
+                          log("[ERROR] App still appears to be asleep after wake attempts.")
+                          sys.exit(1)
+
+                  else:
+                      log("[INFO] App does not look asleep.")
+
+                  safe_keepalive_interaction(page)
+
+                  if not check_health(page):
+                      log("[WARN] Health endpoint did not clearly return OK.")
+                      log("[INFO] Re-opening homepage for final check...")
+
+                      page.goto(APP_URL, wait_until="domcontentloaded", timeout=120000)
+                      time.sleep(10)
+                      final_text = get_body_text(page)
+                      print_preview(final_text, title="Final homepage preview", limit=1200)
+
+                      if contains_any(final_text, SLEEP_KEYWORDS):
+                          log("[ERROR] Final check: app is sleeping.")
+                          sys.exit(1)
+
+                      if contains_any(final_text, ERROR_KEYWORDS):
+                          log("[ERROR] Final check: app error detected.")
+                          sys.exit(1)
+
+                  log("[SUCCESS] Streamlit app wake/keepalive process finished successfully.")
+                  sys.exit(0)
+
+              except PlaywrightTimeoutError as exc:
+                  log(f"[ERROR] Playwright timeout: {exc}")
+                  sys.exit(1)
+
+              except Exception as exc:
+                  log(f"[ERROR] Unexpected error: {exc}")
+                  sys.exit(1)
+
+              finally:
+                  browser.close()
+          PY
+
+          python wake_streamlit.py
