@@ -54,6 +54,11 @@ jobs:
               "Zzzz",
           ]
 
+          WAKING_KEYWORDS = [
+              "Your app is waking up",
+              "This will take just a sec",
+          ]
+
           ERROR_KEYWORDS = [
               "Oh no",
               "Error running your app",
@@ -207,14 +212,18 @@ jobs:
                       log("[ERROR] Streamlit error page detected.")
                       sys.exit(1)
 
-                  if contains_any(text, SLEEP_KEYWORDS):
+                  if contains_any(text, SLEEP_KEYWORDS) or contains_any(text, WAKING_KEYWORDS):
                       log("[INFO] Detected Streamlit sleeping page.")
 
-                      if not try_click_wake_button(page):
-                          log("[ERROR] Sleeping page detected, but wake button was not clicked.")
-                          sys.exit(1)
+                      if contains_any(text, SLEEP_KEYWORDS):
+                          if not try_click_wake_button(page):
+                              log("[ERROR] Sleeping page detected, but wake button was not clicked.")
+                              sys.exit(1)
 
-                      log("[INFO] Wake button clicked. Waiting for app to start...")
+                          log("[INFO] Wake button clicked. Waiting for app to start...")
+                      else:
+                          log("[INFO] App is already waking up. Waiting for app to start...")
+
 
                       for seconds in [30, 30, 30, 30]:
                           time.sleep(seconds)
@@ -233,14 +242,14 @@ jobs:
                               log("[ERROR] Error page detected after wake attempt.")
                               sys.exit(1)
 
-                          if not contains_any(text, SLEEP_KEYWORDS):
-                              log("[INFO] App no longer looks asleep.")
+                          if not contains_any(text, SLEEP_KEYWORDS) and not contains_any(text, WAKING_KEYWORDS):
+                              log("[INFO] App no longer looks asleep or waking up.")
                               break
 
                       final_text = get_body_text(page)
 
-                      if contains_any(final_text, SLEEP_KEYWORDS):
-                          log("[ERROR] App still appears to be asleep after wake attempts.")
+                      if contains_any(final_text, SLEEP_KEYWORDS) or contains_any(final_text, WAKING_KEYWORDS):
+                          log("[ERROR] App still appears to be asleep or waking up after wait attempts.")
                           sys.exit(1)
 
                   else:
@@ -257,8 +266,8 @@ jobs:
                       final_text = get_body_text(page)
                       print_preview(final_text, title="Final homepage preview", limit=1200)
 
-                      if contains_any(final_text, SLEEP_KEYWORDS):
-                          log("[ERROR] Final check: app is sleeping.")
+                      if contains_any(final_text, SLEEP_KEYWORDS) or contains_any(final_text, WAKING_KEYWORDS):
+                          log("[ERROR] Final check: app is sleeping or still waking up.")
                           sys.exit(1)
 
                       if contains_any(final_text, ERROR_KEYWORDS):
