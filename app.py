@@ -8,6 +8,7 @@ from sections import (
     go_page,
     homolog_page,
     kegg_page,
+    motif_page,
     readme_page,
     sequences_page,
 )
@@ -19,6 +20,7 @@ TOOL_LABELS = [
     "中国春同源基因检索（自身同源 + Fielder）",
     "Fielder 基因 → 启动子序列",
     "中国春启动子抓取",
+    "JASPAR Plants 启动子 motif 分析",
     "GO富集分析",
     "KEGG富集分析",
 ]
@@ -30,6 +32,7 @@ PAGE_RENDERERS = {
     "中国春同源基因检索（自身同源 + Fielder）": homolog_page.render,
     "Fielder 基因 → 启动子序列": fielder_promoter_page.render,
     "中国春启动子抓取": cs_promoter_page.render,
+    "JASPAR Plants 启动子 motif 分析": motif_page.render,
     "GO富集分析": go_page.render,
     "KEGG富集分析": kegg_page.render,
 }
