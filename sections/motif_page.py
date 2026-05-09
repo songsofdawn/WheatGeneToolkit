@@ -1,11 +1,12 @@
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from utils.jaspar_pwm_scan import (
     load_jaspar_pwm,
     parse_fasta_or_plain,
-    scan_sequences_with_jaspar,
+    scan_sequences_with_jaspar_significance,
 )
 
 
@@ -23,12 +24,26 @@ DETAIL_COLUMNS = [
     "matched_seq",
     "raw_score",
     "relative_score",
+    "p_value",
+    "q_value",
+    "significant",
     "distance_to_sequence_end",
     "species",
     "tax_group",
     "family",
     "class",
     "collection",
+]
+SUMMARY_COLUMNS = [
+    "sequence_id",
+    "matrix_id",
+    "tf_name",
+    "consensus",
+    "total_significant_hits",
+    "best_q_value",
+    "max_relative_score",
+    "best_matched_seq",
+    "best_position",
 ]
 
 
@@ -57,20 +72,40 @@ def _filter_motifs(motifs, keyword: str):
     return filtered
 
 
-def _build_summary(result_df):
+def _build_significant_summary(significant_df: pd.DataFrame) -> pd.DataFrame:
     """
-    生成 motif 命中汇总表。
+    对显著 TFBS 结果按序列和 motif 分组汇总。
     """
-    return (
-        result_df.groupby(["matrix_id", "tf_name", "consensus"], dropna=False)
+    if significant_df.empty:
+        return pd.DataFrame(columns=SUMMARY_COLUMNS)
+
+    group_cols = ["sequence_id", "matrix_id", "tf_name", "consensus"]
+    summary_df = (
+        significant_df.groupby(group_cols, dropna=False)
         .agg(
-            sequence_count=("sequence_id", "nunique"),
-            total_hits=("sequence_id", "size"),
+            total_significant_hits=("sequence_id", "size"),
+            best_q_value=("q_value", "min"),
             max_relative_score=("relative_score", "max"),
-            mean_relative_score=("relative_score", "mean"),
         )
         .reset_index()
-        .sort_values(["total_hits", "max_relative_score"], ascending=[False, False])
+    )
+
+    best_rows = (
+        significant_df.sort_values(["q_value", "relative_score"], ascending=[True, False])
+        .drop_duplicates(group_cols)
+        .copy()
+    )
+    best_rows["best_position"] = (
+        best_rows["start"].astype(str) + "-" + best_rows["end"].astype(str) + "(" + best_rows["strand"].astype(str) + ")"
+    )
+    best_rows = best_rows[group_cols + ["matched_seq", "best_position"]].rename(
+        columns={"matched_seq": "best_matched_seq"}
+    )
+
+    summary_df = summary_df.merge(best_rows, on=group_cols, how="left")
+    return summary_df[SUMMARY_COLUMNS].sort_values(
+        ["best_q_value", "total_significant_hits", "max_relative_score"],
+        ascending=[True, False, False],
     )
 
 
@@ -109,16 +144,27 @@ def render():
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        cutoff = st.slider(
-            "relative score cutoff",
+        relative_cutoff = st.slider(
+            "relative score 初筛阈值",
             min_value=0.70,
             max_value=0.99,
             value=0.85,
             step=0.01,
         )
     with col2:
-        scan_reverse = st.checkbox("同时扫描反向互补链", value=True)
+        qvalue_cutoff = st.number_input(
+            "q-value cutoff",
+            min_value=0.001,
+            max_value=1.0,
+            value=0.05,
+            step=0.01,
+            format="%.3f",
+        )
     with col3:
+        scan_reverse = st.checkbox("同时扫描反向互补链", value=True)
+
+    col4, col5, col6 = st.columns(3)
+    with col4:
         max_total_hits = st.number_input(
             "最大输出 hits 数",
             min_value=100,
@@ -126,6 +172,23 @@ def render():
             value=20000,
             step=1000,
         )
+    with col5:
+        background_mode = st.selectbox(
+            "背景模型",
+            options=["input", "uniform"],
+            format_func=lambda value: {
+                "input": "使用输入序列估计背景",
+                "uniform": "均匀背景 A/C/G/T=0.25",
+            }[value],
+        )
+    with col6:
+        n_background_samples = st.selectbox(
+            "背景模拟次数",
+            options=[10000, 20000, 50000, 100000],
+            index=2,
+        )
+
+    st.caption("背景模拟次数越高，p-value 估计越稳定，但扫描会更慢；测试时可先选择 10000。")
 
     with st.expander("高级筛选", expanded=False):
         motif_keyword = st.text_input(
@@ -151,50 +214,82 @@ def render():
         total_length = sum(len(seq) for seq in records.values())
         st.info(f"输入序列数量: {len(records)}；总长度: {total_length} bp")
         if total_length > 100000:
-            st.warning("输入序列总长度超过 100000 bp，PWM 全库扫描可能较慢。可提高 cutoff 或使用高级筛选减少 motif 数量。")
+            st.warning("输入序列总长度超过 100000 bp，PWM 全库扫描和背景模拟可能较慢。可提高初筛阈值、降低模拟次数或使用高级筛选减少 motif 数量。")
 
-        with st.spinner("正在进行 JASPAR PWM 扫描，请稍候..."):
-            result_df = scan_sequences_with_jaspar(
+        with st.spinner("正在进行 JASPAR PWM 扫描和背景显著性估计，请稍候..."):
+            result_df = scan_sequences_with_jaspar_significance(
                 records=records,
                 motifs=selected_motifs,
-                cutoff=cutoff,
+                relative_cutoff=relative_cutoff,
+                qvalue_cutoff=qvalue_cutoff,
                 scan_reverse=scan_reverse,
                 selected_matrix_ids=None,
                 max_total_hits=int(max_total_hits),
+                background_mode=background_mode,
+                n_background_samples=int(n_background_samples),
+                random_seed=123,
             )
 
         if result_df.empty:
-            st.warning("没有发现超过阈值的潜在 TF binding sites。可以适当降低 cutoff，例如 0.80。")
+            st.warning("没有发现超过 relative score 初筛阈值的潜在 TF binding sites。可以适当降低初筛阈值，例如 0.80。")
+            st.stop()
+
+        result_df = result_df[DETAIL_COLUMNS].sort_values(["q_value", "relative_score"], ascending=[True, False])
+
+        if len(result_df) >= int(max_total_hits):
+            st.warning("候选结果已达到最大输出 hits 数限制，实际命中数可能更多。可提高初筛阈值或增加最大输出 hits 数。")
+
+        significant_df = result_df[result_df["significant"] == True].copy()
+        significant_df = significant_df.sort_values(["q_value", "relative_score"], ascending=[True, False])
+
+        st.success(
+            f"扫描完成：relative score 初筛候选 {len(result_df)} 个；"
+            f"q-value <= {qvalue_cutoff:.3f} 的显著候选 {len(significant_df)} 个。"
+        )
+
+        st.subheader("显著候选 TFBS")
+        if significant_df.empty:
+            st.warning(
+                "没有发现 q-value 小于阈值的显著候选 TFBS。可以尝试降低 relative score 初筛阈值，"
+                "或增加背景模拟次数，但请谨慎解释。"
+            )
         else:
-            # 固定列顺序，便于页面查看和 CSV 后续分析。
-            result_df = result_df[DETAIL_COLUMNS]
-            summary_df = _build_summary(result_df)
-
-            if len(result_df) >= int(max_total_hits):
-                st.warning("结果已达到最大输出 hits 数限制，实际命中数可能更多。可提高 cutoff 或增加最大输出 hits 数。")
-
-            st.success(f"扫描完成，共发现 {len(result_df)} 个潜在 TF binding sites。")
-
-            st.subheader("潜在 TF binding sites 明细")
-            st.dataframe(result_df, use_container_width=True)
+            st.dataframe(significant_df, use_container_width=True)
             st.download_button(
-                "下载明细结果 CSV",
-                data=result_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jaspar_plants_pwm_hits.csv",
+                "下载显著结果 CSV",
+                data=significant_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="jaspar_plants_pwm_significant_hits.csv",
                 mime="text/csv",
             )
 
-            st.subheader("motif 命中汇总")
+            summary_df = _build_significant_summary(significant_df)
+            st.subheader("显著 motif 命中汇总")
             st.dataframe(summary_df, use_container_width=True)
             st.download_button(
-                "下载汇总结果 CSV",
+                "下载显著汇总结果 CSV",
                 data=summary_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jaspar_plants_pwm_summary.csv",
+                file_name="jaspar_plants_pwm_significant_summary.csv",
+                mime="text/csv",
+            )
+
+        with st.expander("查看所有 relative score 初筛候选 hit", expanded=False):
+            st.dataframe(result_df, use_container_width=True)
+            st.download_button(
+                "下载全部候选结果 CSV",
+                data=result_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="jaspar_plants_pwm_candidate_hits.csv",
                 mime="text/csv",
             )
 
     st.warning(
-        "注意：PWM 命中只表示启动子中存在与该转录因子结合偏好相似的序列片段，"
-        "不等同于真实调控关系。建议结合表达数据、保守性、ATAC-seq、ChIP-seq "
-        "或实验验证进一步确认。"
+        "注意：relative_score 表示窗口与 PWM 最佳模式的相似度；p-value 表示在背景模型下获得不低于当前 PWM score 的概率；"
+        "q-value 是对多个 motif 和多个窗口检验后的 FDR 校正结果。默认主结果只报告 q-value <= 0.05 的候选 TFBS。"
+        "即使 q-value 显著，也仍然是序列预测，不等同于真实结合证据。"
+    )
+
+    st.info(
+        "本模块采用 PWM score 对启动子窗口进行打分，并通过随机背景模型估计 p-value，再使用 Benjamini-Hochberg "
+        "方法进行多重检验校正得到 q-value。主结果默认仅展示 q-value 小于阈值的候选 TFBS。"
+        "该策略相比单纯 relative score 阈值可以减少短核心 motif 的大量假阳性，但结果仍需结合表达数据、ATAC-seq、"
+        "ChIP-seq 或实验验证。"
     )

@@ -222,7 +222,11 @@ Features:
 - Supports FASTA and plain DNA input / 支持 FASTA 和纯 DNA 输入
 - Supports multiple FASTA records / 支持多条 FASTA 序列
 - Scans both forward and reverse-complement strands / 支持正链和反向互补链扫描
-- Adjustable relative score cutoff, default `0.85` / 可调 relative score cutoff，默认 `0.85`
+- Adjustable relative score pre-filter cutoff, default `0.85` / 可调 relative score 初筛阈值，默认 `0.85`
+- Background-model p-value estimation / 基于背景模型估计 p-value
+- Benjamini-Hochberg FDR correction and q-value output / 使用 Benjamini-Hochberg 方法进行 FDR 校正并输出 q-value
+- Background options: input-sequence background or uniform A/C/G/T background / 背景模型可选择输入序列估计背景或均匀背景
+- Main table reports significant candidates by q-value cutoff / 主结果表按 q-value 阈值展示显著候选结果
 - Optional motif keyword filter by `matrix_id` or TF name / 可按 `matrix_id` 或 TF name 关键词筛选 motif
 - Outputs detailed TF binding site candidates / 输出潜在 TF binding site 明细表
 - Outputs motif-level summary table / 输出 motif 命中汇总表
@@ -245,6 +249,9 @@ strand
 matched_seq
 raw_score
 relative_score
+p_value
+q_value
+significant
 distance_to_sequence_end
 species
 tax_group
@@ -257,9 +264,9 @@ Important interpretation note:
 
 重要解释提醒：
 
-PWM hits are predicted sequence matches only. They indicate that a promoter region contains a sequence similar to a TF binding preference, but they do not prove real TF binding or real regulatory relationships. Please combine expression data, conservation, ATAC-seq, ChIP-seq, or experimental validation.
+PWM hits are predicted sequence matches only. The module estimates p-values from a random background model and applies Benjamini-Hochberg FDR correction to obtain q-values, which helps reduce false positives compared with using relative score alone. Significant q-values still do not prove real TF binding or real regulatory relationships. Please combine expression data, conservation, ATAC-seq, ChIP-seq, or experimental validation.
 
-PWM 命中只是序列层面的预测，表示启动子中存在与某个转录因子结合偏好相似的片段，不等同于真实结合或真实调控证据。建议结合表达数据、保守性、ATAC-seq、ChIP-seq 或实验验证进一步确认。
+PWM 命中只是序列层面的预测。本模块通过随机背景模型估计 p-value，并使用 Benjamini-Hochberg 方法校正得到 q-value，相比单纯使用 relative score 可以减少假阳性。即使 q-value 显著，也不等同于真实结合或真实调控证据。建议结合表达数据、保守性、ATAC-seq、ChIP-seq 或实验验证进一步确认。
 
 ---
 

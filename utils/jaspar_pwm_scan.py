@@ -1,4 +1,7 @@
+import bisect
 import json
+import math
+import random
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
@@ -24,6 +27,9 @@ RESULT_COLUMNS = [
     "family",
     "class",
     "collection",
+    "p_value",
+    "q_value",
+    "significant",
 ]
 
 
@@ -141,6 +147,121 @@ def relative_score(raw_score, min_score, max_score):
         return None
 
 
+def estimate_background_from_records(records):
+    """
+    根据输入序列估计 A/C/G/T 背景频率。
+
+    N 和其他非 A/C/G/T 字符会被忽略。如果有效碱基太少，则使用均匀背景，
+    避免极端输入导致随机背景模型不稳定。
+    """
+    counts = {base: 0 for base in BASES}
+    total = 0
+
+    for sequence in (records or {}).values():
+        for base in clean_sequence(sequence):
+            if base in counts:
+                counts[base] += 1
+                total += 1
+
+    if total < 20:
+        return {base: 0.25 for base in BASES}
+
+    return {base: counts[base] / total for base in BASES}
+
+
+def generate_random_score_distribution(motif, background, n_samples=50000, seed=123):
+    """
+    使用给定背景模型随机生成 DNA window，并计算该 motif 的 PWM raw score 分布。
+
+    返回升序排序后的分数列表。使用 random.Random(seed) 保证结果可复现。
+    """
+    try:
+        motif_length = int(motif.get("length") or 0)
+    except (TypeError, ValueError):
+        return []
+
+    pwm = motif.get("pwm") or {}
+    if motif_length <= 0 or not pwm:
+        return []
+
+    bases = list(BASES)
+    weights = []
+    for base in bases:
+        try:
+            weights.append(float((background or {}).get(base, 0.25)))
+        except (TypeError, ValueError):
+            weights.append(0.25)
+
+    weight_sum = sum(weights)
+    if weight_sum <= 0:
+        weights = [0.25, 0.25, 0.25, 0.25]
+    else:
+        weights = [weight / weight_sum for weight in weights]
+
+    rng = random.Random(seed)
+    scores = []
+    for _ in range(int(n_samples)):
+        # 按背景频率生成随机窗口，再复用现有 PWM 打分函数。
+        window = "".join(rng.choices(bases, weights=weights, k=motif_length))
+        score = score_window(window, pwm)
+        if score is not None:
+            scores.append(score)
+
+    scores.sort()
+    return scores
+
+
+def pvalue_from_score_distribution(raw_score, sorted_scores):
+    """
+    根据随机背景分数分布计算右尾 p-value。
+
+    p-value 表示背景模型中 score >= raw_score 的概率。加入 +1 平滑，
+    避免模拟次数有限时出现 p-value 为 0。
+    """
+    if raw_score is None or not sorted_scores:
+        return 1.0
+
+    n = len(sorted_scores)
+    index = bisect.bisect_left(sorted_scores, float(raw_score))
+    n_ge = n - index
+    return (n_ge + 1) / (n + 1)
+
+
+def bh_fdr_correction(p_values):
+    """
+    Benjamini-Hochberg FDR 校正。
+
+    输入 p-value 列表，返回同长度 q-value 列表。这里手动实现，
+    不依赖 statsmodels，并通过从大到小回填保证 q-value 单调性。
+    """
+    n = len(p_values)
+    if n == 0:
+        return []
+
+    cleaned = []
+    for idx, p_value in enumerate(p_values):
+        try:
+            p = float(p_value)
+            if math.isnan(p) or p < 0:
+                p = 1.0
+            p = min(p, 1.0)
+        except (TypeError, ValueError):
+            p = 1.0
+        cleaned.append((idx, p))
+
+    order = sorted(cleaned, key=lambda item: item[1])
+    q_values = [1.0] * n
+    running_min = 1.0
+
+    for rank in range(n, 0, -1):
+        original_idx, p = order[rank - 1]
+        q = min(p * n / rank, 1.0)
+        running_min = min(running_min, q)
+        q_values[original_idx] = running_min
+
+    return q_values
+
+
 def _metadata_value(motif: dict, key: str) -> str:
     metadata = motif.get("metadata") or {}
     return str(metadata.get(key, "") or "")
@@ -183,6 +304,9 @@ def _make_hit_row(
         "family": _metadata_value(motif, "family"),
         "class": _metadata_value(motif, "class"),
         "collection": _metadata_value(motif, "collection"),
+        "p_value": None,
+        "q_value": None,
+        "significant": None,
     }
 
 
@@ -311,3 +435,87 @@ def scan_sequences_with_jaspar(
                 return pd.DataFrame(all_hits, columns=RESULT_COLUMNS)
 
     return pd.DataFrame(all_hits, columns=RESULT_COLUMNS)
+
+
+def _stable_motif_seed(matrix_id: str, base_seed: int) -> int:
+    """
+    为每个 motif 生成稳定随机种子，避免不同 motif 共用完全相同的随机窗口序列。
+    """
+    offset = sum((idx + 1) * ord(char) for idx, char in enumerate(str(matrix_id)))
+    return int(base_seed) + offset
+
+
+def scan_sequences_with_jaspar_significance(
+    records,
+    motifs,
+    relative_cutoff=0.85,
+    qvalue_cutoff=0.05,
+    scan_reverse=True,
+    selected_matrix_ids=None,
+    max_total_hits=20000,
+    background_mode="input",
+    n_background_samples=50000,
+    random_seed=123,
+) -> pd.DataFrame:
+    """
+    在原有 PWM relative score 扫描基础上增加统计显著性评估。
+
+    流程：
+    1. 先用 relative_cutoff 做初筛，得到候选 hit。
+    2. 根据输入序列或均匀模型建立背景碱基频率。
+    3. 对每个候选 motif 模拟随机背景分数分布并计算 p-value。
+    4. 对所有候选 hit 做 BH-FDR 校正，得到 q-value。
+    """
+    motifs = list(motifs)
+    candidate_df = scan_sequences_with_jaspar(
+        records=records,
+        motifs=motifs,
+        cutoff=relative_cutoff,
+        scan_reverse=scan_reverse,
+        selected_matrix_ids=selected_matrix_ids,
+        max_total_hits=max_total_hits,
+    )
+
+    if candidate_df.empty:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    candidate_df = candidate_df.copy()
+
+    if background_mode == "uniform":
+        background = {base: 0.25 for base in BASES}
+    else:
+        background = estimate_background_from_records(records)
+
+    motif_lookup = {str(motif.get("matrix_id", "")): motif for motif in motifs}
+    distribution_cache = {}
+    p_values = []
+
+    for matrix_id, group in candidate_df.groupby("matrix_id", sort=False):
+        motif = motif_lookup.get(str(matrix_id))
+        if motif is None:
+            p_values.extend([1.0] * len(group))
+            continue
+
+        if matrix_id not in distribution_cache:
+            distribution_cache[matrix_id] = generate_random_score_distribution(
+                motif=motif,
+                background=background,
+                n_samples=n_background_samples,
+                seed=_stable_motif_seed(matrix_id, random_seed),
+            )
+
+        sorted_scores = distribution_cache[matrix_id]
+        for raw_score_value in group["raw_score"].tolist():
+            p_values.append(pvalue_from_score_distribution(raw_score_value, sorted_scores))
+
+    # groupby 遍历会按分组顺序收集 p-value，需要按同样顺序写回原始索引。
+    ordered_indices = []
+    for _, group in candidate_df.groupby("matrix_id", sort=False):
+        ordered_indices.extend(group.index.tolist())
+
+    p_value_by_index = dict(zip(ordered_indices, p_values))
+    candidate_df["p_value"] = [p_value_by_index.get(idx, 1.0) for idx in candidate_df.index]
+    candidate_df["q_value"] = bh_fdr_correction(candidate_df["p_value"].tolist())
+    candidate_df["significant"] = candidate_df["q_value"] <= float(qvalue_cutoff)
+
+    return candidate_df[RESULT_COLUMNS]
