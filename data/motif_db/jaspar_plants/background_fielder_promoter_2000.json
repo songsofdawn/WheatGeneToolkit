@@ -1,0 +1,44 @@
+{
+  "name": "Fielder promoter 2000bp empirical background",
+  "source": "computed from local promoter sequence database",
+  "genome": "Fielder",
+  "promoter_length": 2000,
+  "sequence_count": 116480,
+  "total_bases": 232889722,
+  "counts": {
+    "A": 62008540,
+    "C": 55219790,
+    "G": 53249817,
+    "T": 62411575
+  },
+  "background": {
+    "A": 0.2662570914142789,
+    "C": 0.2371070287077761,
+    "G": 0.2286482054369063,
+    "T": 0.26798767444103866
+  },
+  "used_files": [
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_1A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_1B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_1D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_2A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_2B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_2D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_3A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_3B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_3D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_4A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_4B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_4D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_5A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_5B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_5D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_6A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_6B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_6D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_7A.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_7B.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_7D.db",
+    "C:\\Users\\86156\\Desktop\\Program\\wheatonline\\data\\db\\fielder_promoter_sequence\\fielder_promoter_sequence_unknown.db"
+  ]
+}

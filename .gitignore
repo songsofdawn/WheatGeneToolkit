@@ -35,6 +35,10 @@ ENV/
 *.tmp
 *.temp
 test_jaspar_scan_results.csv
+data/motif_db/jaspar_plants/jaspar_background_*_100000.json
+data/motif_db/jaspar_plants/jaspar_background_*_50000.json
+data/motif_db/jaspar_plants/jaspar_background_*_10000.json
+data/motif_db/jaspar_plants/jaspar_background_*_cdf_*.json
 
 # IDE / editor files
 .vscode/

@@ -208,12 +208,17 @@ data/motif_db/jaspar_plants/
 ├── JASPAR2026_CORE_plants_non-redundant_pfms_jaspar.txt
 ├── JASPAR2026_CORE_plants_non-redundant_pfms_meme.txt
 ├── ultimate_metadata_table_CORE.tsv
-└── jaspar_plants_pwm.json
+├── jaspar_plants_pwm.json
+├── background_cs_promoter_2000.json
+├── background_fielder_promoter_2000.json
+├── jaspar_background_thresholds_uniform.json
+├── jaspar_background_thresholds_cs_promoter.json
+└── jaspar_background_thresholds_fielder_promoter.json
 ```
 
-The Streamlit page reads only `jaspar_plants_pwm.json` during analysis. It does not re-parse the original PFM files at runtime.
+The Streamlit page reads `jaspar_plants_pwm.json` and lightweight precomputed score threshold tables during analysis. It does not load full background score distributions by default.
 
-Streamlit 页面运行分析时只读取 `jaspar_plants_pwm.json`，不会在网页交互过程中重新解析原始 PFM 文件。
+Streamlit 页面运行分析时读取 `jaspar_plants_pwm.json` 和轻量级预计算 score threshold 表；默认不会加载完整背景分布 JSON。
 
 Features:
 
@@ -223,10 +228,10 @@ Features:
 - Supports multiple FASTA records / 支持多条 FASTA 序列
 - Scans both forward and reverse-complement strands / 支持正链和反向互补链扫描
 - Adjustable relative score pre-filter cutoff, default `0.85` / 可调 relative score 初筛阈值，默认 `0.85`
-- Background-model p-value estimation / 基于背景模型估计 p-value
-- Benjamini-Hochberg FDR correction and q-value output / 使用 Benjamini-Hochberg 方法进行 FDR 校正并输出 q-value
-- Background options: input-sequence background or uniform A/C/G/T background / 背景模型可选择输入序列估计背景或均匀背景
-- Main table reports significant candidates by q-value cutoff / 主结果表按 q-value 阈值展示显著候选结果
+- Background score threshold p-level grading / 基于背景 score cutoff 的 p-level 分级
+- Lightweight threshold JSON for Streamlit / 使用适合 Streamlit 的小型阈值 JSON
+- Background options: uniform, Chinese Spring promoter, or Fielder promoter thresholds / 背景阈值表可选择均匀背景、中国春启动子背景或 Fielder 启动子背景
+- Main table reports candidates passing the selected p-level threshold / 主结果表展示通过所选 p-level 阈值的候选结果
 - Optional motif keyword filter by `matrix_id` or TF name / 可按 `matrix_id` 或 TF name 关键词筛选 motif
 - Outputs detailed TF binding site candidates / 输出潜在 TF binding site 明细表
 - Outputs motif-level summary table / 输出 motif 命中汇总表
@@ -249,8 +254,8 @@ strand
 matched_seq
 raw_score
 relative_score
-p_value
-q_value
+p_level
+confidence_level
 significant
 distance_to_sequence_end
 species
@@ -264,9 +269,45 @@ Important interpretation note:
 
 重要解释提醒：
 
-PWM hits are predicted sequence matches only. The module estimates p-values from a random background model and applies Benjamini-Hochberg FDR correction to obtain q-values, which helps reduce false positives compared with using relative score alone. Significant q-values still do not prove real TF binding or real regulatory relationships. Please combine expression data, conservation, ATAC-seq, ChIP-seq, or experimental validation.
+PWM hits are predicted sequence matches only. The module uses precomputed background score cutoffs to assign p-level and confidence levels, which helps reduce false positives compared with using relative score alone while keeping Streamlit fast. This threshold mode does not output exact p-values or q-values. Significant-looking candidates still do not prove real TF binding or real regulatory relationships. Please combine expression data, conservation, ATAC-seq, ChIP-seq, or experimental validation.
 
-PWM 命中只是序列层面的预测。本模块通过随机背景模型估计 p-value，并使用 Benjamini-Hochberg 方法校正得到 q-value，相比单纯使用 relative score 可以减少假阳性。即使 q-value 显著，也不等同于真实结合或真实调控证据。建议结合表达数据、保守性、ATAC-seq、ChIP-seq 或实验验证进一步确认。
+PWM 命中只是序列层面的预测。本模块使用预计算背景 score cutoff 给结果分配 p-level 和 confidence level，相比单纯使用 relative score 可以减少假阳性，同时保持 Streamlit 快速运行。该 threshold 模式不输出精确 p-value 或 q-value。即使候选结果显著，也不等同于真实结合或真实调控证据。建议结合表达数据、保守性、ATAC-seq、ChIP-seq 或实验验证进一步确认。
+
+---
+
+#### Precomputed background thresholds / 预计算背景阈值表
+
+For fast Streamlit analysis, precompute lightweight PWM background score thresholds offline:
+
+为了让 Streamlit 页面快速分析，建议先离线预计算轻量级 PWM 背景 score cutoff 阈值表：
+
+```bash
+python scripts/build_jaspar_background.py
+```
+
+This generates `jaspar_background_thresholds_uniform.json` by default, and also generates Chinese Spring / Fielder promoter threshold files if their empirical background JSON files already exist.
+
+该命令默认生成 `jaspar_background_thresholds_uniform.json`；如果中国春或 Fielder 启动子经验背景 JSON 已存在，也会同时生成对应阈值表。
+
+To compute empirical promoter backgrounds from the local promoter SQLite databases first, run:
+
+如需先从本地启动子 SQLite 数据库统计经验背景，运行：
+
+```bash
+python scripts/build_promoter_background.py
+```
+
+Then run:
+
+然后运行：
+
+```bash
+python scripts/build_jaspar_background.py
+```
+
+The Streamlit page reports whether a lightweight threshold table has been loaded. If the selected threshold JSON is missing, the page asks you to run `python scripts/build_jaspar_background.py`.
+
+Streamlit 页面会提示是否已加载轻量级阈值表。如果所选 threshold JSON 不存在，页面会提示先运行 `python scripts/build_jaspar_background.py`。
 
 ---
 
@@ -645,10 +686,17 @@ Then the program opens only the corresponding small SQLite database.
 │           ├── JASPAR2026_CORE_plants_non-redundant_pfms_jaspar.txt
 │           ├── JASPAR2026_CORE_plants_non-redundant_pfms_meme.txt
 │           ├── ultimate_metadata_table_CORE.tsv
-│           └── jaspar_plants_pwm.json
+│           ├── jaspar_plants_pwm.json
+│           ├── background_cs_promoter_2000.json
+│           ├── background_fielder_promoter_2000.json
+│           ├── jaspar_background_thresholds_uniform.json
+│           ├── jaspar_background_thresholds_cs_promoter.json
+│           └── jaspar_background_thresholds_fielder_promoter.json
 │
 ├── scripts/
+│   ├── build_jaspar_background.py
 │   ├── build_jaspar_pwm.py
+│   ├── build_promoter_background.py
 │   ├── split_sqlite_db.py
 │   └── split_gene_structure_feature.py
 │
@@ -736,9 +784,9 @@ After `data/motif_db/jaspar_plants/jaspar_plants_pwm.json` is available, run:
 python test_jaspar_scan.py
 ```
 
-The script checks whether the local JASPAR PWM JSON can be loaded, parses one test promoter, scans it, and writes:
+The script checks whether the local JASPAR PWM JSON can be loaded, reads `jaspar_background_thresholds_uniform.json` if it exists, parses one test promoter, runs the threshold scanner, and writes:
 
-该脚本会检查本地 JASPAR PWM JSON 能否读取，解析一条测试启动子序列，执行扫描，并输出：
+该脚本会检查本地 JASPAR PWM JSON 能否读取；如果 `jaspar_background_thresholds_uniform.json` 存在，会优先读取它；然后解析一条测试启动子序列，调用 threshold 扫描函数，并输出：
 
 ```text
 test_jaspar_scan_results.csv
@@ -807,6 +855,11 @@ data/db/
 data/go_mapping/
 data/kegg_mapping/
 data/motif_db/jaspar_plants/jaspar_plants_pwm.json
+data/motif_db/jaspar_plants/background_cs_promoter_2000.json
+data/motif_db/jaspar_plants/background_fielder_promoter_2000.json
+data/motif_db/jaspar_plants/jaspar_background_thresholds_uniform.json
+data/motif_db/jaspar_plants/jaspar_background_thresholds_cs_promoter.json
+data/motif_db/jaspar_plants/jaspar_background_thresholds_fielder_promoter.json
 data/TipCode.jpg
 ```
 
@@ -822,9 +875,9 @@ The online version uses the partitioned SQLite databases in `data/db/`.
 
 在线版本使用 `data/db/` 中的分库 SQLite 数据库。
 
-The JASPAR motif page requires `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`.
+The JASPAR motif page requires `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`. For fast Streamlit analysis, include the lightweight `jaspar_background_thresholds_*.json` files.
 
-JASPAR motif 分析页面需要 `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`。
+JASPAR motif 分析页面需要 `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`。为了让 Streamlit 快速分析，建议同时包含轻量级 `jaspar_background_thresholds_*.json` 文件。
 
 ---
 
@@ -880,14 +933,16 @@ The `scripts/` directory contains scripts used to split the original SQLite data
 
 ```text
 scripts/
+├── build_jaspar_background.py
 ├── build_jaspar_pwm.py
+├── build_promoter_background.py
 ├── split_sqlite_db.py
 └── split_gene_structure_feature.py
 ```
 
-These scripts are mainly used for database and motif resource construction and maintenance.
+These scripts are mainly used for database and motif resource construction and maintenance. `build_promoter_background.py` computes empirical A/C/G/T backgrounds from local promoter SQLite databases. `build_jaspar_background.py` precomputes lightweight PWM score thresholds for Streamlit.
 
-这些脚本主要用于数据库和 motif 资源构建维护。普通用户一般不需要运行；JASPAR PWM JSON 已生成时，网页端会直接读取该 JSON。
+这些脚本主要用于数据库和 motif 资源构建维护。`build_promoter_background.py` 会从本地启动子 SQLite 数据库统计 A/C/G/T 经验背景；`build_jaspar_background.py` 会预计算轻量级 PWM score cutoff 阈值表，供 Streamlit 页面快速分级。
 
 ---
 

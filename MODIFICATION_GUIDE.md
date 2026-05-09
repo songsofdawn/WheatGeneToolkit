@@ -17,6 +17,10 @@ sections/
   kegg_page.py
 utils/
   jaspar_pwm_scan.py
+scripts/
+  build_jaspar_pwm.py
+  build_promoter_background.py
+  build_jaspar_background.py
 data/
 ```
 
@@ -46,7 +50,14 @@ data/
   - `db_query.py`：本地 SQLite 查询
   - `go_enrichment.py`：GO 富集分析
   - `kegg_enrichment.py`：KEGG 富集分析
-  - `jaspar_pwm_scan.py`：JASPAR Plants PWM motif 扫描
+  - `jaspar_pwm_scan.py`：JASPAR Plants PWM motif 扫描、threshold p-level 分级；旧 p-value/q-value 工具函数保留作离线扩展
+
+- `scripts/build_jaspar_pwm.py`
+  负责把 JASPAR PFM 转换成网页运行时使用的 `jaspar_plants_pwm.json`，并写入 `total_ic`。
+- `scripts/build_promoter_background.py`
+  从本地启动子 SQLite 数据库统计中国春和 Fielder promoter 的 A/C/G/T 经验背景。
+- `scripts/build_jaspar_background.py`
+  离线模拟背景 PWM score，但只保存少量 p-level cutoff 阈值表，Streamlit 页面优先读取这些小型 JSON 来快速分级。
 
 ## 以后新增功能的推荐方式
 

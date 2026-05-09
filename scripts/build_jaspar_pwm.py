@@ -181,12 +181,23 @@ def pfm_to_pwm(counts, pseudocount=0.8, background=None):
         best_base = max(BASES, key=lambda b: prob_matrix[b][i])
         consensus += best_base
 
+    total_ic = 0.0
+    for i in range(length):
+        # 每个位点的信息量 IC_i = 2 + sum(p_base * log2(p_base))。
+        column_ic = 2.0
+        for base in BASES:
+            prob = prob_matrix[base][i]
+            if prob > 0:
+                column_ic += prob * math.log2(prob)
+        total_ic += column_ic
+
     return {
         "pwm": pwm,
         "probability_matrix": prob_matrix,
         "min_score": min_score,
         "max_score": max_score,
         "consensus": consensus,
+        "total_ic": total_ic,
     }
 
 
@@ -242,6 +253,7 @@ def main():
             "min_score": pwm_info["min_score"],
             "max_score": pwm_info["max_score"],
             "consensus": pwm_info["consensus"],
+            "total_ic": pwm_info["total_ic"],
             "metadata": metadata.get(matrix_id, {}),
         }
 
@@ -263,6 +275,7 @@ def main():
         print("name:", example["name"])
         print("length:", example["length"])
         print("consensus:", example["consensus"])
+        print("total_ic:", example.get("total_ic"))
         print("min_score:", example["min_score"])
         print("max_score:", example["max_score"])
 

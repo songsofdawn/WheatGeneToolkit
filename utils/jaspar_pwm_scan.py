@@ -30,6 +30,9 @@ RESULT_COLUMNS = [
     "p_value",
     "q_value",
     "significant",
+    "p_level",
+    "significance_rank",
+    "confidence_level",
 ]
 
 
@@ -112,6 +115,68 @@ def load_jaspar_pwm(json_path) -> List[dict]:
     if not isinstance(motifs, list):
         raise ValueError(f"JASPAR PWM JSON 格式异常，预期为 motif list: {path}")
     return motifs
+
+
+def load_precomputed_background(json_path):
+    """
+    读取离线预计算的 JASPAR background score distribution JSON。
+
+    文件不存在或格式异常时返回 None，避免 Streamlit 页面因为缺少预计算
+    文件直接崩溃。返回结构包含 background、n_samples 和 distributions。
+    """
+    path = Path(json_path)
+    if not path.exists():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    distributions = payload.get("distributions")
+    if not isinstance(distributions, dict):
+        return None
+
+    return {
+        "name": payload.get("name", ""),
+        "background_name": payload.get("background_name", ""),
+        "background": payload.get("background") or {},
+        "n_samples": payload.get("n_samples"),
+        "motif_count": payload.get("motif_count"),
+        "distributions": distributions,
+    }
+
+
+def load_precomputed_thresholds(json_path):
+    """
+    读取轻量级 JASPAR background threshold JSON。
+
+    文件不存在或格式异常时返回 None，避免 Streamlit 因缺少阈值表而崩溃。
+    """
+    path = Path(json_path)
+    if not path.exists():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    thresholds = payload.get("thresholds")
+    if not isinstance(thresholds, dict):
+        return None
+
+    return {
+        "name": payload.get("name", ""),
+        "background_name": payload.get("background_name", ""),
+        "background": payload.get("background") or {},
+        "n_samples": payload.get("n_samples"),
+        "p_levels": payload.get("p_levels") or [],
+        "motif_count": payload.get("motif_count"),
+        "thresholds": thresholds,
+    }
 
 
 def score_window(window: str, pwm: dict):
@@ -262,6 +327,78 @@ def bh_fdr_correction(p_values):
     return q_values
 
 
+def assign_p_level(raw_score, motif_thresholds):
+    """
+    根据预计算 score cutoff 给 raw_score 分配离散 p-level。
+    """
+    if raw_score is None or not isinstance(motif_thresholds, dict):
+        return ">0.05"
+
+    ordered_levels = [0.0001, 0.001, 0.01, 0.05]
+    for level in ordered_levels:
+        cutoff = motif_thresholds.get(str(level))
+        if cutoff is None:
+            cutoff = motif_thresholds.get(f"{level:g}")
+        try:
+            if float(raw_score) >= float(cutoff):
+                return f"<={level:g}"
+        except (TypeError, ValueError):
+            continue
+
+    return ">0.05"
+
+
+def p_level_to_rank(p_level: str) -> int:
+    """
+    将 p_level 字符串转换为排序等级，数字越小越显著。
+    """
+    order = {
+        "<=0.0001": 1,
+        "<=0.001": 2,
+        "<=0.01": 3,
+        "<=0.05": 4,
+        ">0.05": 5,
+    }
+    return order.get(str(p_level), 5)
+
+
+def p_level_passes_cutoff(p_level: str, cutoff: float = 0.01) -> bool:
+    """
+    判断离散 p_level 是否通过用户选择的 p-level cutoff。
+    """
+    cutoff_to_rank = {
+        0.0001: 1,
+        0.001: 2,
+        0.01: 3,
+        0.05: 4,
+    }
+    try:
+        cutoff_value = float(cutoff)
+    except (TypeError, ValueError):
+        cutoff_value = 0.01
+    target_rank = cutoff_to_rank.get(cutoff_value, 3)
+    return p_level_to_rank(p_level) <= target_rank
+
+
+def confidence_level_from_hit(p_level: str, rel_score) -> str:
+    """
+    根据 p-level 和 relative_score 给候选 TFBS 分级。
+    """
+    try:
+        rel = float(rel_score)
+    except (TypeError, ValueError):
+        rel = 0.0
+
+    rank = p_level_to_rank(p_level)
+    if rank <= p_level_to_rank("<=0.001") and rel >= 0.95:
+        return "high"
+    if rank <= p_level_to_rank("<=0.01") and rel >= 0.90:
+        return "medium"
+    if rank <= p_level_to_rank("<=0.05"):
+        return "low"
+    return "not_significant"
+
+
 def _metadata_value(motif: dict, key: str) -> str:
     metadata = motif.get("metadata") or {}
     return str(metadata.get(key, "") or "")
@@ -307,6 +444,9 @@ def _make_hit_row(
         "p_value": None,
         "q_value": None,
         "significant": None,
+        "p_level": ">0.05",
+        "significance_rank": 5,
+        "confidence_level": "not_significant",
     }
 
 
@@ -456,6 +596,7 @@ def scan_sequences_with_jaspar_significance(
     background_mode="input",
     n_background_samples=50000,
     random_seed=123,
+    precomputed_distributions=None,
 ) -> pd.DataFrame:
     """
     在原有 PWM relative score 扫描基础上增加统计显著性评估。
@@ -481,10 +622,21 @@ def scan_sequences_with_jaspar_significance(
 
     candidate_df = candidate_df.copy()
 
-    if background_mode == "uniform":
+    precomputed_background = {}
+    if isinstance(precomputed_distributions, dict) and "distributions" in precomputed_distributions:
+        precomputed_background = precomputed_distributions.get("background") or {}
+        precomputed_distributions = precomputed_distributions.get("distributions") or {}
+
+    use_input_background = background_mode == "input"
+    if use_input_background:
+        background = estimate_background_from_records(records)
+    elif precomputed_background:
+        background = {base: float(precomputed_background.get(base, 0.25)) for base in BASES}
+    elif background_mode == "uniform":
         background = {base: 0.25 for base in BASES}
     else:
-        background = estimate_background_from_records(records)
+        # 如果 CS/Fielder 预计算分布不存在且没有经验背景信息，则用均匀背景实时模拟作为兜底。
+        background = {base: 0.25 for base in BASES}
 
     motif_lookup = {str(motif.get("matrix_id", "")): motif for motif in motifs}
     distribution_cache = {}
@@ -497,12 +649,20 @@ def scan_sequences_with_jaspar_significance(
             continue
 
         if matrix_id not in distribution_cache:
-            distribution_cache[matrix_id] = generate_random_score_distribution(
-                motif=motif,
-                background=background,
-                n_samples=n_background_samples,
-                seed=_stable_motif_seed(matrix_id, random_seed),
-            )
+            # 优先使用离线预计算分布；只有缺失或 input background 模式才实时模拟。
+            precomputed_scores = None
+            if not use_input_background and isinstance(precomputed_distributions, dict):
+                precomputed_scores = precomputed_distributions.get(str(matrix_id))
+
+            if precomputed_scores:
+                distribution_cache[matrix_id] = precomputed_scores
+            else:
+                distribution_cache[matrix_id] = generate_random_score_distribution(
+                    motif=motif,
+                    background=background,
+                    n_samples=n_background_samples,
+                    seed=_stable_motif_seed(matrix_id, random_seed),
+                )
 
         sorted_scores = distribution_cache[matrix_id]
         for raw_score_value in group["raw_score"].tolist():
@@ -517,5 +677,87 @@ def scan_sequences_with_jaspar_significance(
     candidate_df["p_value"] = [p_value_by_index.get(idx, 1.0) for idx in candidate_df.index]
     candidate_df["q_value"] = bh_fdr_correction(candidate_df["p_value"].tolist())
     candidate_df["significant"] = candidate_df["q_value"] <= float(qvalue_cutoff)
+
+    return candidate_df[RESULT_COLUMNS]
+
+
+def scan_sequences_with_jaspar_thresholds(
+    records,
+    motifs,
+    relative_cutoff=0.90,
+    p_level_cutoff=0.01,
+    scan_reverse=True,
+    selected_matrix_ids=None,
+    max_total_hits=20000,
+    precomputed_thresholds=None,
+    top_n_per_motif_sequence=3,
+) -> pd.DataFrame:
+    """
+    使用轻量级预计算 score cutoff 表对 PWM hits 做显著性分级。
+
+    该函数不加载完整背景分布，也不计算精确 p-value/q-value，适合作为
+    Streamlit 默认快速模式。
+    """
+    motifs = list(motifs)
+    candidate_df = scan_sequences_with_jaspar(
+        records=records,
+        motifs=motifs,
+        cutoff=relative_cutoff,
+        scan_reverse=scan_reverse,
+        selected_matrix_ids=selected_matrix_ids,
+        max_total_hits=max_total_hits,
+    )
+
+    if candidate_df.empty:
+        return pd.DataFrame(columns=RESULT_COLUMNS)
+
+    candidate_df = candidate_df.copy()
+    if isinstance(precomputed_thresholds, dict) and "thresholds" in precomputed_thresholds:
+        threshold_map = precomputed_thresholds.get("thresholds") or {}
+    elif isinstance(precomputed_thresholds, dict):
+        threshold_map = precomputed_thresholds
+    else:
+        threshold_map = {}
+
+    p_levels = []
+    ranks = []
+    confidence_levels = []
+    significant_flags = []
+
+    for _, row in candidate_df.iterrows():
+        matrix_id = str(row.get("matrix_id", ""))
+        motif_thresholds = threshold_map.get(matrix_id, {})
+        p_level = assign_p_level(row.get("raw_score"), motif_thresholds)
+        rank = p_level_to_rank(p_level)
+        confidence = confidence_level_from_hit(p_level, row.get("relative_score"))
+
+        p_levels.append(p_level)
+        ranks.append(rank)
+        confidence_levels.append(confidence)
+        significant_flags.append(p_level_passes_cutoff(p_level, p_level_cutoff))
+
+    candidate_df["p_level"] = p_levels
+    candidate_df["significance_rank"] = ranks
+    candidate_df["confidence_level"] = confidence_levels
+    candidate_df["significant"] = significant_flags
+    candidate_df["p_value"] = None
+    candidate_df["q_value"] = None
+
+    candidate_df = candidate_df.sort_values(
+        ["sequence_id", "matrix_id", "significance_rank", "relative_score", "raw_score"],
+        ascending=[True, True, True, False, False],
+    )
+
+    if top_n_per_motif_sequence is not None and int(top_n_per_motif_sequence) > 0:
+        candidate_df = (
+            candidate_df.groupby(["sequence_id", "matrix_id"], dropna=False)
+            .head(int(top_n_per_motif_sequence))
+            .reset_index(drop=True)
+        )
+
+    candidate_df = candidate_df.sort_values(
+        ["significance_rank", "relative_score", "raw_score"],
+        ascending=[True, False, False],
+    ).reset_index(drop=True)
 
     return candidate_df[RESULT_COLUMNS]

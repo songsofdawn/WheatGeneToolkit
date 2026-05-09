@@ -5,13 +5,40 @@ import streamlit as st
 
 from utils.jaspar_pwm_scan import (
     load_jaspar_pwm,
+    load_precomputed_thresholds,
     parse_fasta_or_plain,
-    scan_sequences_with_jaspar_significance,
+    p_level_passes_cutoff,
+    scan_sequences_with_jaspar_thresholds,
 )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-JASPAR_PWM_PATH = PROJECT_ROOT / "data" / "motif_db" / "jaspar_plants" / "jaspar_plants_pwm.json"
+JASPAR_DIR = PROJECT_ROOT / "data" / "motif_db" / "jaspar_plants"
+JASPAR_PWM_PATH = JASPAR_DIR / "jaspar_plants_pwm.json"
+THRESHOLD_PATHS = {
+    "uniform": JASPAR_DIR / "jaspar_background_thresholds_uniform.json",
+    "cs_promoter": JASPAR_DIR / "jaspar_background_thresholds_cs_promoter.json",
+    "fielder_promoter": JASPAR_DIR / "jaspar_background_thresholds_fielder_promoter.json",
+}
+
+MAIN_COLUMNS = [
+    "sequence_id",
+    "matrix_id",
+    "tf_name",
+    "consensus",
+    "motif_length",
+    "start",
+    "end",
+    "strand",
+    "matched_seq",
+    "raw_score",
+    "relative_score",
+    "p_level",
+    "confidence_level",
+    "species",
+    "family",
+    "class",
+]
 DETAIL_COLUMNS = [
     "sequence_id",
     "matrix_id",
@@ -24,8 +51,9 @@ DETAIL_COLUMNS = [
     "matched_seq",
     "raw_score",
     "relative_score",
-    "p_value",
-    "q_value",
+    "p_level",
+    "significance_rank",
+    "confidence_level",
     "significant",
     "distance_to_sequence_end",
     "species",
@@ -39,9 +67,11 @@ SUMMARY_COLUMNS = [
     "matrix_id",
     "tf_name",
     "consensus",
-    "total_significant_hits",
-    "best_q_value",
+    "total_hits",
+    "best_p_level",
+    "best_confidence_level",
     "max_relative_score",
+    "mean_relative_score",
     "best_matched_seq",
     "best_position",
 ]
@@ -55,58 +85,109 @@ def _load_cached_motifs(json_path: str):
     return load_jaspar_pwm(json_path)
 
 
-def _filter_motifs(motifs, keyword: str):
+@st.cache_data(show_spinner=False)
+def _load_cached_thresholds(json_path: str):
     """
-    按 matrix_id 或 TF name 关键词筛选 motif；为空时返回全部。
+    缓存轻量级背景阈值表。文件不存在时返回 None。
+    """
+    return load_precomputed_thresholds(json_path)
+
+
+def _load_threshold_payloads():
+    """
+    尝试加载所有 threshold JSON。
+    """
+    return {key: _load_cached_thresholds(str(path)) for key, path in THRESHOLD_PATHS.items()}
+
+
+def _has_total_ic(motifs) -> bool:
+    return any("total_ic" in motif for motif in motifs)
+
+
+def _filter_motifs(motifs, keyword: str, min_motif_length: int = 6, min_total_ic=None):
+    """
+    按关键词、motif 长度和 total_ic 过滤 motif。
     """
     keyword = (keyword or "").strip().lower()
-    if not keyword:
-        return motifs
-
     filtered = []
+
     for motif in motifs:
         matrix_id = str(motif.get("matrix_id", "")).lower()
         tf_name = str(motif.get("name", "") or (motif.get("metadata") or {}).get("name", "")).lower()
-        if keyword in matrix_id or keyword in tf_name:
-            filtered.append(motif)
+        motif_length = int(motif.get("length") or 0)
+
+        if keyword and keyword not in matrix_id and keyword not in tf_name:
+            continue
+        if motif_length < int(min_motif_length):
+            continue
+
+        if min_total_ic is not None and "total_ic" in motif:
+            try:
+                if float(motif.get("total_ic", 0.0)) < float(min_total_ic):
+                    continue
+            except (TypeError, ValueError):
+                continue
+
+        filtered.append(motif)
+
     return filtered
 
 
-def _build_significant_summary(significant_df: pd.DataFrame) -> pd.DataFrame:
+def _threshold_option_label(option: str, payloads: dict) -> str:
+    labels = {
+        "uniform": "预计算均匀背景 A/C/G/T=0.25（推荐，速度快）",
+        "cs_promoter": "Chinese Spring 启动子经验背景",
+        "fielder_promoter": "Fielder 启动子经验背景",
+    }
+    status = "已加载" if payloads.get(option) else "未找到"
+    return f"{labels[option]} - {status}"
+
+
+def _build_summary(main_df: pd.DataFrame) -> pd.DataFrame:
     """
-    对显著 TFBS 结果按序列和 motif 分组汇总。
+    对主结果按序列和 motif 分组汇总。
     """
-    if significant_df.empty:
+    if main_df.empty:
         return pd.DataFrame(columns=SUMMARY_COLUMNS)
 
     group_cols = ["sequence_id", "matrix_id", "tf_name", "consensus"]
     summary_df = (
-        significant_df.groupby(group_cols, dropna=False)
+        main_df.groupby(group_cols, dropna=False)
         .agg(
-            total_significant_hits=("sequence_id", "size"),
-            best_q_value=("q_value", "min"),
+            total_hits=("sequence_id", "size"),
+            best_rank=("significance_rank", "min"),
             max_relative_score=("relative_score", "max"),
+            mean_relative_score=("relative_score", "mean"),
         )
         .reset_index()
     )
 
     best_rows = (
-        significant_df.sort_values(["q_value", "relative_score"], ascending=[True, False])
+        main_df.sort_values(["significance_rank", "relative_score", "raw_score"], ascending=[True, False, False])
         .drop_duplicates(group_cols)
         .copy()
     )
     best_rows["best_position"] = (
-        best_rows["start"].astype(str) + "-" + best_rows["end"].astype(str) + "(" + best_rows["strand"].astype(str) + ")"
+        best_rows["start"].astype(str)
+        + "-"
+        + best_rows["end"].astype(str)
+        + "("
+        + best_rows["strand"].astype(str)
+        + ")"
     )
-    best_rows = best_rows[group_cols + ["matched_seq", "best_position"]].rename(
-        columns={"matched_seq": "best_matched_seq"}
+    best_rows = best_rows[
+        group_cols + ["p_level", "confidence_level", "matched_seq", "best_position"]
+    ].rename(
+        columns={
+            "p_level": "best_p_level",
+            "confidence_level": "best_confidence_level",
+            "matched_seq": "best_matched_seq",
+        }
     )
 
     summary_df = summary_df.merge(best_rows, on=group_cols, how="left")
-    return summary_df[SUMMARY_COLUMNS].sort_values(
-        ["best_q_value", "total_significant_hits", "max_relative_score"],
-        ascending=[True, False, False],
-    )
+    summary_df = summary_df.sort_values(["best_rank", "max_relative_score"], ascending=[True, False])
+    return summary_df[SUMMARY_COLUMNS]
 
 
 def render():
@@ -114,10 +195,8 @@ def render():
 
     st.markdown(
         """
-        本模块使用 JASPAR CORE Plants non-redundant PFMs 转换得到的 PWM，
-        用于预测输入启动子中的潜在转录因子结合位点。
-
-        结果是序列层面的预测，不等同于真实结合或真实调控证据。
+        本模块使用 JASPAR Plants PWM 对启动子滑动窗口进行打分，并使用离线预计算的轻量级背景
+        score cutoff 表对命中结果进行显著性分级。该模式不加载完整背景分布 JSON，适合 Streamlit 快速运行。
         """
     )
 
@@ -132,6 +211,15 @@ def render():
         st.error("读取 JASPAR Plants PWM JSON 失败。")
         st.exception(exc)
         st.stop()
+
+    threshold_payloads = _load_threshold_payloads()
+    loaded_thresholds = [key for key, payload in threshold_payloads.items() if payload]
+    if loaded_thresholds:
+        st.success("已加载轻量级背景阈值表，适合 Streamlit 快速分析。")
+    else:
+        st.warning(
+            "未找到轻量级背景阈值表。请先运行：python scripts/build_jaspar_background.py。"
+        )
 
     st.info(f"已加载 JASPAR Plants PWM motifs: {len(motifs)}")
 
@@ -148,58 +236,94 @@ def render():
             "relative score 初筛阈值",
             min_value=0.70,
             max_value=0.99,
-            value=0.85,
+            value=0.90,
             step=0.01,
         )
     with col2:
-        qvalue_cutoff = st.number_input(
-            "q-value cutoff",
-            min_value=0.001,
-            max_value=1.0,
-            value=0.05,
-            step=0.01,
-            format="%.3f",
+        p_level_cutoff = st.selectbox(
+            "p-level 阈值",
+            options=[0.05, 0.01, 0.001, 0.0001],
+            index=1,
+            format_func=lambda value: f"p_level <= {value:g}",
         )
     with col3:
         scan_reverse = st.checkbox("同时扫描反向互补链", value=True)
 
-    col4, col5, col6 = st.columns(3)
+    col4, col5 = st.columns(2)
     with col4:
         max_total_hits = st.number_input(
-            "最大输出 hits 数",
+            "最大候选 hits 数",
             min_value=100,
             max_value=100000,
             value=20000,
             step=1000,
         )
     with col5:
-        background_mode = st.selectbox(
-            "背景模型",
-            options=["input", "uniform"],
-            format_func=lambda value: {
-                "input": "使用输入序列估计背景",
-                "uniform": "均匀背景 A/C/G/T=0.25",
-            }[value],
-        )
-    with col6:
-        n_background_samples = st.selectbox(
-            "背景模拟次数",
-            options=[10000, 20000, 50000, 100000],
-            index=2,
+        background_choice = st.selectbox(
+            "背景阈值表",
+            options=["uniform", "cs_promoter", "fielder_promoter"],
+            index=0,
+            format_func=lambda option: _threshold_option_label(option, threshold_payloads),
         )
 
-    st.caption("背景模拟次数越高，p-value 估计越稳定，但扫描会更慢；测试时可先选择 10000。")
+    selected_thresholds = threshold_payloads.get(background_choice)
+    if selected_thresholds:
+        st.caption(
+            f"当前阈值表样本数: {selected_thresholds.get('n_samples', '未知')}；"
+            f"p-levels: {selected_thresholds.get('p_levels', [])}"
+        )
+    else:
+        st.error("当前选择的阈值表不存在。请先生成 threshold JSON 后再扫描。")
 
+    has_total_ic = _has_total_ic(motifs)
     with st.expander("高级筛选", expanded=False):
         motif_keyword = st.text_input(
             "按 matrix_id 或 TF name 关键词筛选 motif",
             placeholder="例如 MA0561 或 PIF4；留空表示扫描全部 motif",
         )
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            min_motif_length = st.number_input(
+                "最小 motif_length",
+                min_value=1,
+                max_value=50,
+                value=6,
+                step=1,
+            )
+        with col_b:
+            if has_total_ic:
+                min_total_ic = st.number_input(
+                    "最小 total_ic",
+                    min_value=0.0,
+                    max_value=50.0,
+                    value=6.0,
+                    step=0.5,
+                )
+            else:
+                min_total_ic = None
+                st.caption("当前 PWM JSON 不含 total_ic 字段，仅使用 motif_length 过滤。")
+        with col_c:
+            top_n_per_motif_sequence = st.number_input(
+                "每个 motif 每条序列 top hits",
+                min_value=1,
+                max_value=20,
+                value=3,
+                step=1,
+            )
 
-    selected_motifs = _filter_motifs(motifs, motif_keyword)
+    selected_motifs = _filter_motifs(
+        motifs,
+        keyword=motif_keyword,
+        min_motif_length=int(min_motif_length),
+        min_total_ic=min_total_ic,
+    )
     st.caption(f"当前参与扫描的 motifs: {len(selected_motifs)}")
 
     if st.button("开始 JASPAR PWM 扫描", key="btn_jaspar_pwm_scan"):
+        if not selected_thresholds:
+            st.error("没有可用的轻量级背景阈值表。请先运行 python scripts/build_jaspar_background.py。")
+            st.stop()
+
         records = parse_fasta_or_plain(sequence_text)
         records = {name: seq for name, seq in records.items() if seq}
 
@@ -208,88 +332,83 @@ def render():
             st.stop()
 
         if not selected_motifs:
-            st.warning("当前筛选条件下没有可扫描的 motif，请调整关键词。")
+            st.warning("当前筛选条件下没有可扫描的 motif，请调整关键词、motif_length 或 total_ic。")
             st.stop()
 
         total_length = sum(len(seq) for seq in records.values())
         st.info(f"输入序列数量: {len(records)}；总长度: {total_length} bp")
         if total_length > 100000:
-            st.warning("输入序列总长度超过 100000 bp，PWM 全库扫描和背景模拟可能较慢。可提高初筛阈值、降低模拟次数或使用高级筛选减少 motif 数量。")
+            st.warning("输入序列总长度超过 100000 bp，PWM 扫描可能较慢。可提高初筛阈值或使用高级筛选减少 motif 数量。")
 
-        with st.spinner("正在进行 JASPAR PWM 扫描和背景显著性估计，请稍候..."):
-            result_df = scan_sequences_with_jaspar_significance(
+        with st.spinner("正在进行 JASPAR PWM 扫描和 p-level 显著性分级，请稍候..."):
+            candidate_df = scan_sequences_with_jaspar_thresholds(
                 records=records,
                 motifs=selected_motifs,
                 relative_cutoff=relative_cutoff,
-                qvalue_cutoff=qvalue_cutoff,
+                p_level_cutoff=p_level_cutoff,
                 scan_reverse=scan_reverse,
                 selected_matrix_ids=None,
                 max_total_hits=int(max_total_hits),
-                background_mode=background_mode,
-                n_background_samples=int(n_background_samples),
-                random_seed=123,
+                precomputed_thresholds=selected_thresholds,
+                top_n_per_motif_sequence=int(top_n_per_motif_sequence),
             )
 
-        if result_df.empty:
-            st.warning("没有发现超过 relative score 初筛阈值的潜在 TF binding sites。可以适当降低初筛阈值，例如 0.80。")
+        if candidate_df.empty:
+            st.warning("没有发现超过 relative score 初筛阈值的潜在 TF binding sites。可以适当降低初筛阈值，例如 0.85。")
             st.stop()
 
-        result_df = result_df[DETAIL_COLUMNS].sort_values(["q_value", "relative_score"], ascending=[True, False])
-
-        if len(result_df) >= int(max_total_hits):
-            st.warning("候选结果已达到最大输出 hits 数限制，实际命中数可能更多。可提高初筛阈值或增加最大输出 hits 数。")
-
-        significant_df = result_df[result_df["significant"] == True].copy()
-        significant_df = significant_df.sort_values(["q_value", "relative_score"], ascending=[True, False])
+        candidate_df = candidate_df[DETAIL_COLUMNS].sort_values(
+            ["significance_rank", "relative_score", "raw_score"],
+            ascending=[True, False, False],
+        )
+        main_df = candidate_df[
+            candidate_df["p_level"].apply(lambda value: p_level_passes_cutoff(value, p_level_cutoff))
+        ].copy()
 
         st.success(
-            f"扫描完成：relative score 初筛候选 {len(result_df)} 个；"
-            f"q-value <= {qvalue_cutoff:.3f} 的显著候选 {len(significant_df)} 个。"
+            f"扫描完成：候选 hits {len(candidate_df)} 个；"
+            f"通过 p_level <= {p_level_cutoff:g} 的主结果 {len(main_df)} 个。"
         )
 
-        st.subheader("显著候选 TFBS")
-        if significant_df.empty:
+        st.subheader("显著主结果表")
+        if main_df.empty:
             st.warning(
-                "没有发现 q-value 小于阈值的显著候选 TFBS。可以尝试降低 relative score 初筛阈值，"
-                "或增加背景模拟次数，但请谨慎解释。"
+                "没有发现满足当前 p-level 阈值的候选 TFBS。可以尝试降低 relative score 初筛阈值，"
+                "或使用更宽松的 p-level 阈值，但请谨慎解释。"
             )
         else:
-            st.dataframe(significant_df, use_container_width=True)
+            st.dataframe(main_df[MAIN_COLUMNS], use_container_width=True)
             st.download_button(
                 "下载显著结果 CSV",
-                data=significant_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jaspar_plants_pwm_significant_hits.csv",
+                data=main_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="jaspar_plants_pwm_threshold_hits.csv",
                 mime="text/csv",
             )
 
-            summary_df = _build_significant_summary(significant_df)
-            st.subheader("显著 motif 命中汇总")
+            summary_df = _build_summary(main_df)
+            st.subheader("汇总表")
             st.dataframe(summary_df, use_container_width=True)
             st.download_button(
-                "下载显著汇总结果 CSV",
+                "下载汇总结果 CSV",
                 data=summary_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jaspar_plants_pwm_significant_summary.csv",
+                file_name="jaspar_plants_pwm_threshold_summary.csv",
                 mime="text/csv",
             )
 
-        with st.expander("查看所有 relative score 初筛候选 hit", expanded=False):
-            st.dataframe(result_df, use_container_width=True)
+        with st.expander("候选结果表：查看所有 relative score 初筛通过的 top hits", expanded=False):
+            st.dataframe(candidate_df, use_container_width=True)
             st.download_button(
                 "下载全部候选结果 CSV",
-                data=result_df.to_csv(index=False).encode("utf-8-sig"),
-                file_name="jaspar_plants_pwm_candidate_hits.csv",
+                data=candidate_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name="jaspar_plants_pwm_threshold_candidates.csv",
                 mime="text/csv",
             )
 
-    st.warning(
-        "注意：relative_score 表示窗口与 PWM 最佳模式的相似度；p-value 表示在背景模型下获得不低于当前 PWM score 的概率；"
-        "q-value 是对多个 motif 和多个窗口检验后的 FDR 校正结果。默认主结果只报告 q-value <= 0.05 的候选 TFBS。"
-        "即使 q-value 显著，也仍然是序列预测，不等同于真实结合证据。"
-    )
-
     st.info(
-        "本模块采用 PWM score 对启动子窗口进行打分，并通过随机背景模型估计 p-value，再使用 Benjamini-Hochberg "
-        "方法进行多重检验校正得到 q-value。主结果默认仅展示 q-value 小于阈值的候选 TFBS。"
-        "该策略相比单纯 relative score 阈值可以减少短核心 motif 的大量假阳性，但结果仍需结合表达数据、ATAC-seq、"
-        "ChIP-seq 或实验验证。"
+        "本模块使用预计算背景 score cutoff 对 PWM 命中进行显著性分级。p_level 表示该 raw_score 至少达到某个背景显著性水平。"
+        "例如 p_level <= 0.001 表示随机背景中约 0.1% 的窗口能达到或超过该分数。"
+        "该方法比单纯 relative_score 更能减少短核心 motif 假阳性，同时保持 Streamlit 快速运行。"
+        "由于该模式是分级近似，不输出精确 p-value/q-value。如需精确统计检验，建议使用离线 FIMO/MEME Suite 或后续高级离线模式。"
+        "即使分级显著，结果仍然只是序列层面的结合位点预测，不等同于真实调控关系；建议结合表达数据、ATAC-seq、ChIP-seq、"
+        "保守性分析或实验验证进一步确认。"
     )
