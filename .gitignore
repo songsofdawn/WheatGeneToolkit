@@ -34,6 +34,7 @@ ENV/
 *.log
 *.tmp
 *.temp
+test_jaspar_scan_results.csv
 
 # IDE / editor files
 .vscode/

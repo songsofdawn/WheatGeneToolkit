@@ -12,9 +12,11 @@ sections/
   homolog_page.py
   fielder_promoter_page.py
   cs_promoter_page.py
+  motif_page.py
   go_page.py
   kegg_page.py
 utils/
+  jaspar_pwm_scan.py
 data/
 ```
 
@@ -39,6 +41,12 @@ data/
 
 - `utils/*.py`
   放底层数据查询和分析逻辑，不直接负责页面渲染。
+
+  例如：
+  - `db_query.py`：本地 SQLite 查询
+  - `go_enrichment.py`：GO 富集分析
+  - `kegg_enrichment.py`：KEGG 富集分析
+  - `jaspar_pwm_scan.py`：JASPAR Plants PWM motif 扫描
 
 ## 以后新增功能的推荐方式
 

@@ -1,8 +1,8 @@
 # WheatGeneToolkit / 小麦基因批量处理工具
 
-🌾 **WheatGeneToolkit** is an integrated web-based toolkit for wheat gene annotation, gene ID conversion, sequence retrieval, homolog search, promoter extraction, and GO/KEGG enrichment analysis.
+🌾 **WheatGeneToolkit** is an integrated web-based toolkit for wheat gene annotation, gene ID conversion, sequence retrieval, homolog search, promoter extraction, JASPAR Plants promoter motif scanning, and GO/KEGG enrichment analysis.
 
-🌾 **WheatGeneToolkit / 小麦基因批量处理工具** 是一个面向小麦功能基因组学研究的在线工具平台，集成了基因功能注释、基因号转换、序列下载、同源基因检索、启动子序列提取、GO 富集分析和 KEGG 富集分析等常用功能。
+🌾 **WheatGeneToolkit / 小麦基因批量处理工具** 是一个面向小麦功能基因组学研究的在线工具平台，集成了基因功能注释、基因号转换、序列下载、同源基因检索、启动子序列提取、JASPAR Plants 启动子 motif 扫描、GO 富集分析和 KEGG 富集分析等常用功能。
 
 This platform is designed for wheat researchers working on RNA-seq, GWAS, QTL mapping, gene family analysis, promoter analysis, and molecular biology experiments.
 
@@ -193,7 +193,77 @@ Features:
 
 ---
 
-### 7. GO enrichment analysis / GO 富集分析
+### 7. JASPAR Plants promoter motif analysis / JASPAR Plants 启动子 motif 分析
+
+Paste promoter FASTA records or plain DNA sequences and scan them against the local JASPAR CORE Plants non-redundant PWM database.
+
+粘贴启动子 FASTA 或纯 DNA 序列后，可以使用本地 JASPAR CORE Plants non-redundant PWM 数据库扫描潜在转录因子结合位点。
+
+Local motif files are stored in:
+
+本地 motif 数据文件位于：
+
+```text
+data/motif_db/jaspar_plants/
+├── JASPAR2026_CORE_plants_non-redundant_pfms_jaspar.txt
+├── JASPAR2026_CORE_plants_non-redundant_pfms_meme.txt
+├── ultimate_metadata_table_CORE.tsv
+└── jaspar_plants_pwm.json
+```
+
+The Streamlit page reads only `jaspar_plants_pwm.json` during analysis. It does not re-parse the original PFM files at runtime.
+
+Streamlit 页面运行分析时只读取 `jaspar_plants_pwm.json`，不会在网页交互过程中重新解析原始 PFM 文件。
+
+Features:
+
+功能特点：
+
+- Supports FASTA and plain DNA input / 支持 FASTA 和纯 DNA 输入
+- Supports multiple FASTA records / 支持多条 FASTA 序列
+- Scans both forward and reverse-complement strands / 支持正链和反向互补链扫描
+- Adjustable relative score cutoff, default `0.85` / 可调 relative score cutoff，默认 `0.85`
+- Optional motif keyword filter by `matrix_id` or TF name / 可按 `matrix_id` 或 TF name 关键词筛选 motif
+- Outputs detailed TF binding site candidates / 输出潜在 TF binding site 明细表
+- Outputs motif-level summary table / 输出 motif 命中汇总表
+- Supports CSV downloads / 支持 CSV 下载
+- Uses a maximum hit limit to avoid freezing the web page / 使用最大 hits 数限制避免页面卡顿
+
+Common output fields include:
+
+常见输出字段包括：
+
+```text
+sequence_id
+matrix_id
+tf_name
+consensus
+motif_length
+start
+end
+strand
+matched_seq
+raw_score
+relative_score
+distance_to_sequence_end
+species
+tax_group
+family
+class
+collection
+```
+
+Important interpretation note:
+
+重要解释提醒：
+
+PWM hits are predicted sequence matches only. They indicate that a promoter region contains a sequence similar to a TF binding preference, but they do not prove real TF binding or real regulatory relationships. Please combine expression data, conservation, ATAC-seq, ChIP-seq, or experimental validation.
+
+PWM 命中只是序列层面的预测，表示启动子中存在与某个转录因子结合偏好相似的片段，不等同于真实结合或真实调控证据。建议结合表达数据、保守性、ATAC-seq、ChIP-seq 或实验验证进一步确认。
+
+---
+
+### 8. GO enrichment analysis / GO 富集分析
 
 Input a DEG list with one gene ID per line and perform GO enrichment analysis.
 
@@ -308,7 +378,7 @@ Notes:
 
 ---
 
-### 8. KEGG enrichment analysis / KEGG 富集分析
+### 9. KEGG enrichment analysis / KEGG 富集分析
 
 Input a DEG list with one gene ID per line and perform KEGG pathway enrichment analysis.
 
@@ -551,24 +621,45 @@ Then the program opens only the corresponding small SQLite database.
 ```text
 .
 ├── app.py
-├── start.bat
-├── test.py
+├── app_shared.py
 ├── requirements.txt
 ├── runtime.txt
+├── start.bat
+├── test.py
+├── test_jaspar_scan.py
 │
 ├── data/
 │   ├── TipCode.jpg
 │   ├── db/
 │   ├── go_mapping/
-│   └── kegg_mapping/
+│   ├── kegg_mapping/
+│   └── motif_db/
+│       └── jaspar_plants/
+│           ├── JASPAR2026_CORE_plants_non-redundant_pfms_jaspar.txt
+│           ├── JASPAR2026_CORE_plants_non-redundant_pfms_meme.txt
+│           ├── ultimate_metadata_table_CORE.tsv
+│           └── jaspar_plants_pwm.json
 │
 ├── scripts/
+│   ├── build_jaspar_pwm.py
 │   ├── split_sqlite_db.py
 │   └── split_gene_structure_feature.py
+│
+├── sections/
+│   ├── readme_page.py
+│   ├── gene_info_page.py
+│   ├── sequences_page.py
+│   ├── homolog_page.py
+│   ├── fielder_promoter_page.py
+│   ├── cs_promoter_page.py
+│   ├── motif_page.py
+│   ├── go_page.py
+│   └── kegg_page.py
 │
 └── utils/
     ├── db_query.py
     ├── go_enrichment.py
+    ├── jaspar_pwm_scan.py
     └── kegg_enrichment.py
 ```
 
@@ -628,6 +719,30 @@ http://localhost:8501
 
 ---
 
+## JASPAR PWM Scanner Test / JASPAR PWM 扫描测试
+
+After `data/motif_db/jaspar_plants/jaspar_plants_pwm.json` is available, run:
+
+当 `data/motif_db/jaspar_plants/jaspar_plants_pwm.json` 已经生成后，可以运行：
+
+```bash
+python test_jaspar_scan.py
+```
+
+The script checks whether the local JASPAR PWM JSON can be loaded, parses one test promoter, scans it, and writes:
+
+该脚本会检查本地 JASPAR PWM JSON 能否读取，解析一条测试启动子序列，执行扫描，并输出：
+
+```text
+test_jaspar_scan_results.csv
+```
+
+This CSV is a local test artifact and is ignored by Git.
+
+该 CSV 是本地测试产物，已加入 Git 忽略规则。
+
+---
+
 ## Example Input / 示例输入
 
 Chinese Spring gene IDs:
@@ -679,10 +794,12 @@ GitHub 仓库中应包含以下文件和目录：
 app.py
 requirements.txt
 runtime.txt
+sections/
 utils/
 data/db/
 data/go_mapping/
 data/kegg_mapping/
+data/motif_db/jaspar_plants/jaspar_plants_pwm.json
 data/TipCode.jpg
 ```
 
@@ -697,6 +814,10 @@ wheat_toolkit.db
 The online version uses the partitioned SQLite databases in `data/db/`.
 
 在线版本使用 `data/db/` 中的分库 SQLite 数据库。
+
+The JASPAR motif page requires `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`.
+
+JASPAR motif 分析页面需要 `data/motif_db/jaspar_plants/jaspar_plants_pwm.json`。
 
 ---
 
@@ -725,6 +846,8 @@ env/
 Thumbs.db
 
 .streamlit/secrets.toml
+
+test_jaspar_scan_results.csv
 ```
 
 Do not ignore:
@@ -733,11 +856,12 @@ Do not ignore:
 
 ```text
 data/db/
+data/motif_db/jaspar_plants/jaspar_plants_pwm.json
 ```
 
-because the small partitioned SQLite databases are required for online deployment.
+because the small partitioned SQLite databases and the generated JASPAR PWM JSON are required for online deployment.
 
-因为 `data/db/` 中的小型 SQLite 分库是在线部署所必需的。
+因为 `data/db/` 中的小型 SQLite 分库和生成好的 JASPAR PWM JSON 是在线部署所必需的。
 
 ---
 
@@ -749,13 +873,14 @@ The `scripts/` directory contains scripts used to split the original SQLite data
 
 ```text
 scripts/
+├── build_jaspar_pwm.py
 ├── split_sqlite_db.py
 └── split_gene_structure_feature.py
 ```
 
-These scripts are mainly used for database construction and maintenance.
+These scripts are mainly used for database and motif resource construction and maintenance.
 
-这些脚本主要用于数据库构建和维护，普通用户不需要运行。
+这些脚本主要用于数据库和 motif 资源构建维护。普通用户一般不需要运行；JASPAR PWM JSON 已生成时，网页端会直接读取该 JSON。
 
 ---
 
@@ -764,6 +889,7 @@ These scripts are mainly used for database construction and maintenance.
 - This tool is designed for wheat gene list processing and functional genomics analysis.
 - The current promoter definition is fixed as 2000 bp upstream of ATG.
 - Homolog relationships are computationally inferred and should be interpreted with caution.
+- JASPAR PWM motif hits are potential TF binding site predictions, not direct evidence of real binding or regulation.
 - GO enrichment results depend on the quality and completeness of local GO annotation files.
 - KEGG enrichment results depend on the quality and completeness of local gene-KO and KO-pathway mapping files.
 - Enrichment results should be interpreted together with biological knowledge and experimental validation.
@@ -771,6 +897,7 @@ These scripts are mainly used for database construction and maintenance.
 - 本工具主要用于小麦基因列表处理和功能基因组学分析。
 - 当前启动子定义固定为 ATG 上游 2000 bp。
 - 同源关系为计算推断结果，应谨慎解释。
+- JASPAR PWM motif 命中是潜在 TF binding site 预测，不等同于真实结合或真实调控证据。
 - GO 富集结果依赖本地 GO 注释文件的质量和完整性。
 - KEGG 富集结果依赖本地 gene-KO 和 KO-pathway 映射文件的质量和完整性。
 - 富集分析结果应结合生物学知识和实验验证进行综合判断。
@@ -785,7 +912,7 @@ Potential future modules include:
 
 - Gene structure visualization / 基因结构可视化
 - Expression profile visualization / 表达谱可视化
-- Promoter motif analysis / 启动子 motif 分析
+- Motif result visualization / motif 结果可视化
 - Co-expression network query / 共表达网络查询
 - REST API service / API 接口服务
 - Batch result packaging and ZIP download / 批量结果打包下载
