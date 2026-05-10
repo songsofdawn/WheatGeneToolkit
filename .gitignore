@@ -8,6 +8,7 @@ wheat_toolkit.db
 
 # Python cache and build artifacts
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 .pytest_cache/

@@ -8,7 +8,7 @@
 超过 GitHub 单文件限制，因此需要按染色体进一步拆分。
 
 运行方式：
-cd C:\\Users\\86156\\Desktop\\Program\\wheatonline
+cd <project-root>
 python scripts\\split_gene_structure_feature.py
 """
 

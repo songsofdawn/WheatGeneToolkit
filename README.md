@@ -4,6 +4,14 @@
 
 🌾 **WheatGeneToolkit / 小麦基因批量处理工具** 是一个面向小麦功能基因组学研究的在线工具平台，集成了基因功能注释、基因号转换、序列下载、同源基因检索、启动子序列提取、JASPAR Plants 启动子 motif 扫描、GO 富集分析和 KEGG 富集分析等常用功能。
 
+Online app / 在线访问：
+
+https://wheatgenetoolkit.streamlit.app/
+
+GitHub repository / GitHub 仓库：
+
+https://github.com/songsofdawn/WheatGeneToolkit
+
 This platform is designed for wheat researchers working on RNA-seq, GWAS, QTL mapping, gene family analysis, promoter analysis, and molecular biology experiments.
 
 本工具适用于 RNA-seq、GWAS、QTL 定位、基因家族分析、启动子分析和分子生物学实验等小麦研究场景，尤其适合对大批量基因列表进行快速处理。
@@ -32,9 +40,11 @@ Pre-launch notes:
 
 ## Online App / 在线访问
 
-The app can be deployed on Streamlit Cloud.
+The app is available on Streamlit Cloud:
 
-本项目可部署到 Streamlit Cloud 进行在线访问。
+本项目已部署到 Streamlit Cloud，可在线访问：
+
+https://wheatgenetoolkit.streamlit.app/
 
 ```text
 Main file path: app.py
@@ -747,8 +757,8 @@ Clone the repository:
 克隆仓库：
 
 ```bash
-git clone https://github.com/songsofdawn/wheat_genes_operation.git
-cd wheat_genes_operation
+git clone https://github.com/songsofdawn/WheatGeneToolkit.git
+cd WheatGeneToolkit
 ```
 
 Create a Python environment:
@@ -859,7 +869,7 @@ Recommended settings:
 推荐设置：
 
 ```text
-Repository: songsofdawn/wheat_genes_operation
+Repository: songsofdawn/WheatGeneToolkit
 Branch: main
 Main file path: app.py
 Python version: 3.11

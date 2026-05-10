@@ -24,7 +24,7 @@ data/db/
 
 运行方式：
 
-cd C:\\Users\\86156\\Desktop\\Program\\wheatonline
+cd <project-root>
 python scripts\\split_sqlite_db.py
 """
 

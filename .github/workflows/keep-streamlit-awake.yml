@@ -32,7 +32,7 @@ jobs:
       - name: Wake or keep Streamlit app alive
         shell: bash
         env:
-          APP_URL: "https://wheatgenesoperation-96yfkzyzehlld67vb4vd3c.streamlit.app"
+          APP_URL: "https://wheatgenetoolkit.streamlit.app"
         run: |
           cat > wake_streamlit.py <<'PY'
           import os
