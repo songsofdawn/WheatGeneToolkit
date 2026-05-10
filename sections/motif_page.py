@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from utils.db_query import get_promoter
 from utils.jaspar_pwm_scan import (
     load_jaspar_pwm,
     load_precomputed_thresholds,
@@ -20,6 +21,8 @@ THRESHOLD_PATHS = {
     "cs_promoter": JASPAR_DIR / "jaspar_background_thresholds_cs_promoter.json",
     "fielder_promoter": JASPAR_DIR / "jaspar_background_thresholds_fielder_promoter.json",
 }
+EXAMPLE_TAGW2_GENE_ID = "TraesCS6A02G189300"
+EXAMPLE_TAGW2_FASTA_HEADER = ">TaGW2-A|TraesCS6A02G189300|promoter_2000"
 
 MAIN_COLUMNS = [
     "sequence_id",
@@ -98,6 +101,34 @@ def _load_threshold_payloads():
     尝试加载所有 threshold JSON。
     """
     return {key: _load_cached_thresholds(str(path)) for key, path in THRESHOLD_PATHS.items()}
+
+
+def _wrap_sequence(sequence: str, width: int = 80) -> str:
+    """
+    将 DNA 序列按固定宽度换行，便于在文本框中以 FASTA 格式展示。
+    """
+    sequence = "".join(str(sequence or "").split()).upper()
+    return "\n".join(sequence[i : i + width] for i in range(0, len(sequence), width))
+
+
+def _load_tagw2_example_fasta():
+    """
+    从项目已有 Chinese Spring promoter 查询函数中读取 TaGW2-A 2000 bp 启动子。
+    不在代码中硬编码序列，保证示例和本地数据库保持一致。
+    """
+    try:
+        promoter_df = get_promoter(EXAMPLE_TAGW2_GENE_ID)
+    except Exception:
+        return None
+
+    if promoter_df is None or promoter_df.empty or "promoter_sequence" not in promoter_df.columns:
+        return None
+
+    promoter_seq = _wrap_sequence(promoter_df.iloc[0].get("promoter_sequence", ""))
+    if not promoter_seq:
+        return None
+
+    return f"{EXAMPLE_TAGW2_FASTA_HEADER}\n{promoter_seq}\n"
 
 
 def _has_total_ic(motifs) -> bool:
@@ -222,6 +253,19 @@ def render():
         )
 
     st.info(f"已加载 JASPAR Plants PWM motifs: {len(motifs)}")
+
+    st.subheader("加载示例")
+    st.caption(
+        "TaGW2-A 是小麦籽粒大小和粒重相关基因。该示例用于展示 JASPAR Plants PWM motif "
+        "分析流程，结果仅代表潜在 TFBS 预测。"
+    )
+    if st.button("加载示例：TaGW2-A / TraesCS6A02G189300", key="btn_load_tagw2_motif_example"):
+        example_fasta = _load_tagw2_example_fasta()
+        if example_fasta is None:
+            st.error("未能从本地启动子数据库中找到 TraesCS6A02G189300，请确认 Chinese Spring promoter 数据库是否存在。")
+        else:
+            st.session_state["jaspar_promoter_input"] = example_fasta
+            st.success("已加载 TaGW2-A / TraesCS6A02G189300 的 2000 bp 启动子示例。")
 
     sequence_text = st.text_area(
         "粘贴启动子 FASTA 或纯 DNA 序列",
