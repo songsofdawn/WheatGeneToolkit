@@ -27,19 +27,18 @@ def main():
     print(f"Loaded motifs: {len(motifs)}")
     print(f"Parsed records: {list(records.keys())}")
 
-    if thresholds:
-        print(f"Loaded threshold table: {threshold_path}")
-        print(f"Threshold samples: {thresholds.get('n_samples')}")
-        test_motifs = motifs
-    else:
-        print(f"Threshold table not found: {threshold_path}")
-        print("Run: python scripts/build_jaspar_background.py")
-        print("Fallback test uses first 50 motifs without threshold significance.")
-        test_motifs = motifs[:50]
+    if not thresholds:
+        raise FileNotFoundError(
+            f"Threshold JSON not found: {threshold_path}\n"
+            "请先运行: python scripts/build_jaspar_background.py"
+        )
+
+    print(f"Loaded threshold table: {threshold_path}")
+    print(f"Threshold samples: {thresholds.get('n_samples')}")
 
     result_df = scan_sequences_with_jaspar_thresholds(
         records=records,
-        motifs=test_motifs,
+        motifs=motifs,
         relative_cutoff=0.90,
         p_level_cutoff=0.01,
         scan_reverse=True,

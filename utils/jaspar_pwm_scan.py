@@ -699,14 +699,39 @@ def scan_sequences_with_jaspar_thresholds(
     Streamlit 默认快速模式。
     """
     motifs = list(motifs)
-    candidate_df = scan_sequences_with_jaspar(
-        records=records,
-        motifs=motifs,
-        cutoff=relative_cutoff,
-        scan_reverse=scan_reverse,
-        selected_matrix_ids=selected_matrix_ids,
-        max_total_hits=max_total_hits,
-    )
+    selected_ids = set(selected_matrix_ids or [])
+    use_filter = bool(selected_ids)
+    all_hits = []
+
+    # threshold 模式显式执行扫描流程，不调用旧的 scan_sequences_with_jaspar，
+    # 避免页面或测试脚本拿到缺少 p_level 字段的旧版结果。
+    for motif in motifs:
+        matrix_id = str(motif.get("matrix_id", ""))
+        if use_filter and matrix_id not in selected_ids:
+            continue
+
+        for sequence_id, sequence in (records or {}).items():
+            remaining = int(max_total_hits) - len(all_hits)
+            if remaining <= 0:
+                break
+
+            hits = scan_sequence_with_motif(
+                sequence_id=sequence_id,
+                sequence=sequence,
+                motif=motif,
+                cutoff=relative_cutoff,
+                scan_reverse=scan_reverse,
+                max_hits=remaining,
+            )
+            all_hits.extend(hits)
+
+            if len(all_hits) >= int(max_total_hits):
+                break
+
+        if len(all_hits) >= int(max_total_hits):
+            break
+
+    candidate_df = pd.DataFrame(all_hits, columns=RESULT_COLUMNS)
 
     if candidate_df.empty:
         return pd.DataFrame(columns=RESULT_COLUMNS)
