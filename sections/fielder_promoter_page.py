@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_FIELDER_GENES, as_text, read_gene_ids, render_example_tools
+from app_shared import EXAMPLE_FIELDER_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
 from utils.db_query import get_fielder_promoter
 
 
@@ -24,6 +24,7 @@ def render():
 
     st.info("当前数据库内置的是 promoter_2000，因此这里固定返回 ATG 上游 2000 bp 启动子序列。")
     st.info(f"待处理基因数：{len(gene_ids)}")
+    show_large_input_notice(len(gene_ids), task_name="Fielder 启动子序列提取", threshold=300)
 
     if st.button("开始抓取 Fielder 启动子", key="btn_fielder_promoter"):
         progress = st.progress(0)
@@ -74,12 +75,15 @@ def render():
 
         st.success("Fielder 启动子抓取完成")
         st.dataframe(summary_df, use_container_width=True)
-        st.download_button(
-            "下载 Fielder 启动子 FASTA",
-            "".join(fasta_records),
-            "fielder_promoter_sequences.fasta",
-            "text/plain",
-        )
+        if fasta_records:
+            st.download_button(
+                "下载 Fielder 启动子 FASTA",
+                "".join(fasta_records),
+                "fielder_promoter_sequences.fasta",
+                "text/plain",
+            )
+        else:
+            st.warning("没有可下载的结果，请检查输入基因 ID 是否存在。")
         st.download_button(
             "下载 Fielder 启动子统计 CSV",
             summary_df.to_csv(index=False).encode("utf-8-sig"),

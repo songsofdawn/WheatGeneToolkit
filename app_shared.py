@@ -80,6 +80,17 @@ def as_text(items):
     return "\n".join(items)
 
 
+def show_large_input_notice(count, task_name="查询", threshold=500):
+    """
+    只做耗时软提醒，不阻止用户继续运行批量任务。
+    """
+    if count >= threshold:
+        st.warning(
+            f"当前输入数量较多（{count} 个），{task_name}可能需要较长时间，请耐心等待；"
+            "如只是测试功能，建议先使用少量基因。"
+        )
+
+
 def load_example_gene_text(file_path, fallback_items=None):
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:

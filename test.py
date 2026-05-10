@@ -1,5 +1,7 @@
 import sqlite3
 
+# 注意：这是旧版单库测试脚本，当前主程序已使用 data/db 分库结构。
+# 保留它仅用于检查历史 wheat_toolkit.db，不代表线上 Streamlit 的查询路径。
 DB_FILE = "wheat_toolkit.db"
 
 def main():

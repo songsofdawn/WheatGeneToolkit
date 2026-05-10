@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools
+from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
 from utils.db_query import get_gene_annotation, get_gene_core, get_primary_gene_id
 
 
@@ -27,6 +27,7 @@ def render():
         st.stop()
 
     st.info(f"待查询基因数：{len(gene_ids)}")
+    show_large_input_notice(len(gene_ids), task_name="基因功能注释查询", threshold=500)
 
     if st.button("开始查询", key="btn_gene_info"):
         progress_bar = st.progress(0)

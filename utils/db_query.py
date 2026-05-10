@@ -17,6 +17,11 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_DIR = PROJECT_ROOT / "data" / "db"
 MANIFEST_FILE = DB_DIR / "manifest.json"
+DATABASE_MISSING_MESSAGE = "数据库文件缺失，请检查 data/db/manifest.json 和分库 SQLite 文件是否存在。"
+
+
+class DatabaseUnavailableError(RuntimeError):
+    """数据库资源不可用时抛出的友好异常，避免模块导入阶段直接崩溃。"""
 
 
 def _get_file_cache_key(path: Path) -> tuple[str, int, int]:
@@ -47,7 +52,26 @@ def _load_manifest() -> dict:
     return _load_manifest_cached(*_get_file_cache_key(MANIFEST_FILE))
 
 
-MANIFEST = _load_manifest()
+MANIFEST = None
+
+
+def _get_manifest() -> dict:
+    """
+    懒加载 data/db/manifest.json。
+    这样即使云端部署时数据库文件缺失，Streamlit 入口和 ReadMe 页面也能正常打开。
+    """
+    global MANIFEST
+
+    if MANIFEST is not None:
+        return MANIFEST
+
+    try:
+        MANIFEST = _load_manifest()
+        return MANIFEST
+    except FileNotFoundError as exc:
+        raise DatabaseUnavailableError(f"{DATABASE_MISSING_MESSAGE}\n{exc}") from exc
+    except Exception as exc:
+        raise DatabaseUnavailableError(f"{DATABASE_MISSING_MESSAGE}\n读取 manifest 失败: {exc}") from exc
 
 
 # ============================================================
@@ -155,8 +179,9 @@ def _get_table_info(table: str) -> dict:
     """
     从 manifest 中获得某个表的拆分信息。
     """
+    manifest = _get_manifest()
     try:
-        return MANIFEST["tables"][table]
+        return manifest["tables"][table]
     except KeyError:
         raise KeyError(
             f"manifest.json 中找不到表 {table}。\n"
@@ -224,12 +249,15 @@ def _fetch_df(
     """
     通用查询函数，自动根据 table/gene_id 路由到正确的小数据库。
     """
-    db_path = _get_table_db_path(table, gene_id_for_route)
-    return _read_sql_query_cached(
-        *_get_file_cache_key(db_path),
-        sql,
-        tuple(params),
-    ).copy()
+    try:
+        db_path = _get_table_db_path(table, gene_id_for_route)
+        return _read_sql_query_cached(
+            *_get_file_cache_key(db_path),
+            sql,
+            tuple(params),
+        ).copy()
+    except FileNotFoundError as exc:
+        raise DatabaseUnavailableError(f"{DATABASE_MISSING_MESSAGE}\n缺失文件: {exc}") from exc
 
 
 # ============================================================
@@ -655,7 +683,9 @@ def check_database_status() -> pd.DataFrame:
     """
     rows = []
 
-    for table, info in MANIFEST.get("tables", {}).items():
+    manifest = _get_manifest()
+
+    for table, info in manifest.get("tables", {}).items():
         strategy = info.get("strategy")
 
         if strategy == "whole_table":

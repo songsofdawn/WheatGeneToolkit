@@ -1,5 +1,6 @@
 import io
 import math
+import textwrap
 from functools import lru_cache
 from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional
@@ -268,9 +269,9 @@ def run_go_enrichment(
 
 def create_go_barplot_bytes(
     df: pd.DataFrame,
-    top_n: int = 10,
-    plot_metric: str = "fdr",
-    figsize=(12, 12)
+    top_n: int = 15,
+    plot_metric: str = "qvalue",
+    figsize=None
 ) -> Optional[bytes]:
     if df.empty:
         return None
@@ -279,41 +280,73 @@ def create_go_barplot_bytes(
     if df.empty:
         return None
 
-    if plot_metric == "fdr":
-        score_col = "minus_log10_padj"
-        x_label = "-log10(FDR)"
-        sort_col = "p.adjust"
-    elif plot_metric == "pvalue":
-        score_col = "minus_log10_pvalue"
-        x_label = "-log10(P-value)"
-        sort_col = "pvalue"
-    else:
-        raise ValueError("plot_metric 只能是 'fdr' 或 'pvalue'")
+    # GO 图只使用 qvalue 表示显著性；当前结果表中 qvalue 等价于 p.adjust。
+    qvalue_col = "qvalue" if "qvalue" in df.columns else "p.adjust"
+    if qvalue_col not in df.columns:
+        return None
 
     subsets = []
     for onto in ["BP", "CC", "MF"]:
         sub = df[df["ontology"] == onto].copy()
         if sub.empty:
             continue
-        sub = sub.sort_values(sort_col, ascending=True).head(top_n)
-        sub["Description_short"] = sub["go_term_name"].fillna(sub["go_id"])
+        sub[qvalue_col] = pd.to_numeric(sub[qvalue_col], errors="coerce").fillna(1.0)
+        sub["Count"] = pd.to_numeric(sub["Count"], errors="coerce").fillna(0)
+        sub = sub.sort_values(qvalue_col, ascending=True).head(top_n)
+        sub["Description_short"] = sub["go_term_name"].fillna(sub["go_id"]).apply(
+            lambda value: "\n".join(textwrap.wrap(str(value), width=42))
+        )
         subsets.append((onto, sub))
 
     if not subsets:
         return None
 
     n_panels = len(subsets)
-    fig, axes = plt.subplots(n_panels, 1, figsize=figsize, constrained_layout=True)
+    total_terms = sum(len(sub) for _, sub in subsets)
+    fig_height = max(5.5, 0.42 * total_terms + 1.2 * n_panels)
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=figsize or (9.5, fig_height),
+        constrained_layout=True,
+    )
 
     if n_panels == 1:
         axes = [axes]
 
+    all_qvalues = pd.concat([sub[qvalue_col] for _, sub in subsets], ignore_index=True)
+    vmin = float(all_qvalues.min()) if not all_qvalues.empty else 0.0
+    vmax = float(all_qvalues.max()) if not all_qvalues.empty else 1.0
+    if vmax == vmin:
+        vmin = 0.0
+        vmax = max(vmax, 1e-6)
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    cmap = plt.cm.coolwarm_r
+
     for ax, (onto, sub) in zip(axes, subsets):
-        sub = sub.sort_values(score_col, ascending=True)
-        ax.barh(sub["Description_short"], sub[score_col])
-        ax.set_title(f"{onto} enrichment")
-        ax.set_xlabel(x_label)
+        sub = sub.sort_values(qvalue_col, ascending=False)
+        ax.barh(
+            sub["Description_short"],
+            sub["Count"],
+            color=cmap(norm(sub[qvalue_col].values)),
+            edgecolor="none",
+        )
+        ax.set_title(f"{onto} GO enrichment", fontsize=12)
+        ax.set_xlabel("Count", fontsize=11)
         ax.set_ylabel("GO term")
+        ax.set_facecolor("#EBEBEB")
+        ax.grid(True, axis="x", color="white", linewidth=1.2)
+        ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.85)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.tick_params(axis="both", labelsize=9)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, fraction=0.025, pad=0.02)
+    cbar.set_label("qvalue", fontsize=10)
+    cbar.ax.tick_params(labelsize=8)
 
     buf = io.BytesIO()
     plt.savefig(buf, format="png", dpi=300, bbox_inches="tight")

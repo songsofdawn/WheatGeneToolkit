@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools
+from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
 from utils.db_query import get_primary_gene_id, get_sequences
 
 
@@ -23,6 +23,7 @@ def render():
         st.stop()
 
     st.info(f"待查询基因数：{len(gene_ids)}")
+    show_large_input_notice(len(gene_ids), task_name="序列查询", threshold=300)
 
     if st.button("获取序列（cDNA / CDS / Protein）", key="btn_sequences"):
         cdna_records = []
@@ -85,9 +86,14 @@ def render():
 
         st.success("序列查询完成")
         st.dataframe(summary_df, use_container_width=True)
-        st.download_button("下载 cDNA FASTA", "".join(cdna_records), "cdna_sequences.fasta", "text/plain")
-        st.download_button("下载 CDS FASTA", "".join(cds_records), "cds_sequences.fasta", "text/plain")
-        st.download_button("下载 Protein FASTA", "".join(protein_records), "protein_sequences.fasta", "text/plain")
+        if cdna_records:
+            st.download_button("下载 cDNA FASTA", "".join(cdna_records), "cdna_sequences.fasta", "text/plain")
+        if cds_records:
+            st.download_button("下载 CDS FASTA", "".join(cds_records), "cds_sequences.fasta", "text/plain")
+        if protein_records:
+            st.download_button("下载 Protein FASTA", "".join(protein_records), "protein_sequences.fasta", "text/plain")
+        if not (cdna_records or cds_records or protein_records):
+            st.warning("没有可下载的结果，请检查输入基因 ID 是否存在。")
         st.download_button(
             "下载序列统计 CSV",
             summary_df.to_csv(index=False).encode("utf-8-sig"),

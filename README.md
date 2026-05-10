@@ -12,6 +12,22 @@ The current version is built with **Streamlit** and uses a **locally partitioned
 
 当前版本基于 **Streamlit** 构建，并采用 **本地分库 SQLite 数据库** 进行查询，避免直接加载大型数据库，更适合部署到 GitHub 和 Streamlit Cloud。
 
+Pre-launch notes:
+
+- The production query backend is `data/db/manifest.json` plus the partitioned SQLite files under `data/db/`; the old `wheat_toolkit.db` is only a source/legacy construction file.
+- If the database bundle is missing, the app will show a friendly message asking you to check `data/db/manifest.json` and the SQLite shard files.
+- Batch gene input is supported for gene info, sequence, homolog, promoter, GO, and KEGG modules. Very large inputs may take longer; test with a small list before formal analysis.
+- Example Chinese Spring IDs: `TraesCS2D02G571200`, `TraesCS5B02G233300`, `TraesCS6A02G189300`. Example Fielder ID: `TraesFLD5B01G105200`.
+- Empty sequence/promoter results do not create FASTA downloads; check whether the gene ID exists, whether the species/version matches, and whether the database bundle is complete.
+
+上线前提示：
+
+- 当前线上查询后端是 `data/db/manifest.json` 和 `data/db/` 下的 SQLite 分库；旧的 `wheat_toolkit.db` 仅作为历史单库或构建来源。
+- 如果数据库文件缺失，网站会提示检查 `data/db/manifest.json` 和 SQLite 分库文件。
+- gene info、序列、同源、启动子、GO、KEGG 均支持批量输入；输入很多基因时可能需要等待，正式分析前建议先用少量基因测试。
+- 示例中国春基因：`TraesCS2D02G571200`、`TraesCS5B02G233300`、`TraesCS6A02G189300`。示例 Fielder 基因：`TraesFLD5B01G105200`。
+- 序列或启动子查询没有成功结果时不会生成 FASTA 下载文件，请检查基因 ID、物种版本和数据库文件是否完整。
+
 ---
 
 ## Online App / 在线访问
@@ -227,7 +243,7 @@ Features:
 - Supports FASTA and plain DNA input / 支持 FASTA 和纯 DNA 输入
 - Supports multiple FASTA records / 支持多条 FASTA 序列
 - Scans both forward and reverse-complement strands / 支持正链和反向互补链扫描
-- Adjustable relative score pre-filter cutoff, default `0.85` / 可调 relative score 初筛阈值，默认 `0.85`
+- Adjustable relative score pre-filter cutoff, default `0.90` / 可调 relative score 初筛阈值，默认 `0.90`
 - Background score threshold p-level grading / 基于背景 score cutoff 的 p-level 分级
 - Lightweight threshold JSON for Streamlit / 使用适合 Streamlit 的小型阈值 JSON
 - Background options: uniform, Chinese Spring promoter, or Fielder promoter thresholds / 背景阈值表可选择均匀背景、中国春启动子背景或 Fielder 启动子背景
@@ -329,6 +345,10 @@ GO 富集分析模块输出内容包括：
 The enrichment analysis is based on local wheat GO annotation files and uses hypergeometric testing with multiple-testing correction.
 
 GO 富集分析基于本地小麦 GO 注释文件，使用超几何检验进行富集分析，并进行多重检验校正。
+
+The GO enrichment plot uses qvalue as the significance indicator. By default, it shows the top 15 most significant terms by qvalue for each GO ontology category (BP, CC, and MF), and this number can be adjusted on the page. Smaller qvalue means stronger enrichment significance. The plot style is kept close to the KEGG enrichment plots for easier comparison.
+
+GO 富集图使用 qvalue 表示显著性，qvalue 越小表示富集越显著。默认情况下，每个 GO 大类（BP、CC、MF）展示 qvalue 最显著的前 15 个 term，可在页面中调整；图形风格已尽量与 KEGG 富集图保持一致，便于比较。
 
 Local GO annotation files are stored in:
 
@@ -830,6 +850,10 @@ This project can be deployed on Streamlit Cloud.
 
 本项目可以部署到 Streamlit Cloud。
 
+Deployment note: `data/db/` is required for the online app and is relatively large. On Streamlit Cloud, pay attention to repository size, cold-start time, disk usage, and memory limits. Do not commit local temporary files, cache folders, large intermediate JSON files, or local absolute paths.
+
+部署提示：`data/db/` 是在线查询必需的数据目录，但体积较大。部署到 Streamlit Cloud 时需要注意仓库体积、冷启动时间、磁盘占用和内存限制。不要提交本地临时文件、缓存目录、大型中间 JSON 或本地绝对路径。
+
 Recommended settings:
 
 推荐设置：
@@ -908,6 +932,10 @@ Thumbs.db
 .streamlit/secrets.toml
 
 test_jaspar_scan_results.csv
+data/motif_db/jaspar_plants/jaspar_background_*_100000.json
+data/motif_db/jaspar_plants/jaspar_background_*_50000.json
+data/motif_db/jaspar_plants/jaspar_background_*_10000.json
+data/motif_db/jaspar_plants/jaspar_background_*_cdf_*.json
 ```
 
 Do not ignore:

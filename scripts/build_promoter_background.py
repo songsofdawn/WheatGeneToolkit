@@ -141,6 +141,11 @@ def build_one(project_root: Path, label: str, directory_name: str, single_db_nam
         print(f"[WARN] {label} promoter 数据库没有可统计的 A/C/G/T 碱基，已跳过。")
         return
 
+    result["used_files"] = [
+        str(Path(path).relative_to(project_root)).replace("\\", "/")
+        for path in result["used_files"]
+    ]
+
     jaspar_dir = project_root / "data" / "motif_db" / "jaspar_plants"
     write_background(
         output_path=jaspar_dir / output_name,

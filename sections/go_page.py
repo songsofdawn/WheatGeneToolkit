@@ -8,6 +8,7 @@ from app_shared import (
     read_gene_ids,
     render_example_tools,
     run_cached_go_enrichment,
+    show_large_input_notice,
 )
 from utils.go_enrichment import create_go_barplot_bytes
 
@@ -31,18 +32,15 @@ def render():
     if not gene_ids:
         st.info("请上传 DEG 文件或手动输入基因号")
         st.stop()
+    show_large_input_notice(len(gene_ids), task_name="GO 富集分析", threshold=2000)
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        top_n = st.number_input("每个大类显示前 N 个 term", min_value=3, max_value=30, value=10, step=1)
+        top_n = st.number_input("每个大类显示前 N 个 term", min_value=3, max_value=30, value=15, step=1)
     with col2:
         padj_cutoff = st.number_input("FDR 阈值", min_value=0.0001, max_value=1.0, value=0.05, step=0.01, format="%.4f")
     with col3:
-        plot_metric = st.selectbox(
-            "作图横轴",
-            options=["fdr", "pvalue"],
-            format_func=lambda x: "-log10(FDR)" if x == "fdr" else "-log10(P-value)",
-        )
+        st.caption("GO 富集图使用 qvalue 表示显著性，qvalue 越小越显著。")
 
     min_size = st.number_input("最小 GO 基因集大小", min_value=1, max_value=50, value=3, step=1)
     max_size = st.number_input("最大 GO 基因集大小", min_value=10, max_value=10000, value=2000, step=10)
@@ -92,8 +90,12 @@ def render():
                 else:
                     st.dataframe(sig_df, use_container_width=True)
 
-                plot_df = sig_df if not sig_df.empty else results_df
-                plot_bytes = create_go_barplot_bytes(df=plot_df, top_n=top_n, plot_metric=plot_metric)
+                plot_df = sig_df.copy()
+                for ontology, label in [("BP", "BP"), ("CC", "CC"), ("MF", "MF")]:
+                    if plot_df.empty or plot_df[plot_df["ontology"] == ontology].empty:
+                        st.info(f"{label} 类别未检测到显著富集的 GO term。")
+
+                plot_bytes = create_go_barplot_bytes(df=plot_df, top_n=top_n, plot_metric="qvalue")
 
                 if plot_bytes is not None:
                     st.subheader("GO 富集条形图")

@@ -8,6 +8,7 @@ from app_shared import (
     read_gene_ids,
     render_example_tools,
     run_cached_kegg_enrichment,
+    show_large_input_notice,
 )
 from utils.kegg_enrichment import create_kegg_barplot_bytes, create_kegg_bubbleplot_bytes
 
@@ -37,6 +38,7 @@ def render():
         st.stop()
 
     st.info(f"待分析基因数: {len(gene_ids)}")
+    show_large_input_notice(len(gene_ids), task_name="KEGG 富集分析", threshold=2000)
 
     col1, col2, col3 = st.columns(3)
     with col1:

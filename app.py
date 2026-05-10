@@ -12,6 +12,7 @@ from sections import (
     readme_page,
     sequences_page,
 )
+from utils.db_query import DatabaseUnavailableError
 
 TOOL_LABELS = [
     "ReadMe",
@@ -44,7 +45,11 @@ def main():
 
     tool = st.sidebar.radio("选择功能，初次使用请阅读 ReadMe", TOOL_LABELS)
     show_tip_box()
-    PAGE_RENDERERS[tool]()
+    try:
+        PAGE_RENDERERS[tool]()
+    except DatabaseUnavailableError as exc:
+        st.error(str(exc))
+        st.info("如果是在 Streamlit Cloud 部署，请确认仓库中包含 data/db/manifest.json 以及 data/db/ 下的 SQLite 分库文件。")
 
 
 if __name__ == "__main__":

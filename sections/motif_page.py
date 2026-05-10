@@ -380,9 +380,20 @@ def render():
             st.stop()
 
         total_length = sum(len(seq) for seq in records.values())
-        st.info(f"输入序列数量: {len(records)}；总长度: {total_length} bp")
+        st.info(
+            f"预计扫描规模：序列数量 {len(records)}；总长度 {total_length} bp；"
+            f"motif 数量 {len(selected_motifs)}；反向互补链 {'开启' if scan_reverse else '关闭'}。"
+        )
         if total_length > 100000:
-            st.warning("输入序列总长度超过 100000 bp，PWM 扫描可能较慢。可提高初筛阈值或使用高级筛选减少 motif 数量。")
+            st.warning(
+                "当前输入序列较长，motif 扫描可能需要较长时间。建议优先测试少量序列，"
+                "或确认当前任务需要批量扫描。"
+            )
+        if total_length > 500000:
+            st.warning(
+                "当前输入序列总长度很大，扫描可能明显变慢。如果页面长时间无响应，"
+                "请减少序列数量或分批运行。"
+            )
 
         with st.spinner("正在进行 JASPAR PWM 扫描和 p-level 显著性分级，请稍候..."):
             candidate_df = scan_sequences_with_jaspar_thresholds(
@@ -415,6 +426,12 @@ def render():
         )
 
         st.subheader("显著主结果表")
+        st.caption(
+            "字段说明：relative_score 越接近 1 表示越接近 PWM 最优匹配；"
+            "p_level 是基于预计算阈值划分的经验显著性等级，不是精确 p-value；"
+            "confidence_level 由 p_level 和得分综合给出；"
+            "significance_rank 数值越小越显著。"
+        )
         if main_df.empty:
             st.warning(
                 "没有发现满足当前 p-level 阈值的候选 TFBS。可以尝试降低 relative score 初筛阈值，"
