@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import hypergeom
@@ -211,6 +212,330 @@ def build_summary_df(
     })
 
 
+def wrap_go_terms(term, width: int = 35) -> str:
+    """Wrap long GO labels without losing their meaning."""
+    value = "" if pd.isna(term) else str(term)
+    return "\n".join(textwrap.wrap(value, width=width, break_long_words=False)) or value
+
+
+def _get_qvalue_col(df: pd.DataFrame, qvalue_col: str = "qvalue") -> Optional[str]:
+    if qvalue_col in df.columns:
+        return qvalue_col
+    if "p.adjust" in df.columns:
+        return "p.adjust"
+    return None
+
+
+def _scale_bubble_size(counts, min_size: int = 45, max_size: int = 360) -> np.ndarray:
+    counts = np.asarray(counts, dtype=float)
+    if len(counts) == 0:
+        return np.array([])
+    if np.nanmax(counts) == np.nanmin(counts):
+        return np.full(len(counts), (min_size + max_size) / 2)
+
+    sqrt_counts = np.sqrt(counts)
+    return min_size + (
+        (sqrt_counts - sqrt_counts.min()) /
+        (sqrt_counts.max() - sqrt_counts.min())
+    ) * (max_size - min_size)
+
+
+def _parse_ratio_to_float(value) -> float:
+    if pd.isna(value):
+        return np.nan
+    text = str(value).strip()
+    if "/" not in text:
+        return pd.to_numeric(text, errors="coerce")
+    numerator, denominator = text.split("/", 1)
+    numerator = pd.to_numeric(numerator, errors="coerce")
+    denominator = pd.to_numeric(denominator, errors="coerce")
+    if denominator == 0 or pd.isna(numerator) or pd.isna(denominator):
+        return np.nan
+    return float(numerator) / float(denominator)
+
+
+def _prepare_go_plot_df(
+    go_df: pd.DataFrame,
+    ontology: str,
+    top_n: int = 15,
+    qvalue_col: str = "qvalue",
+    count_col: str = "Count",
+    label_wrap_width: int = 35,
+) -> Tuple[pd.DataFrame, Optional[str], str]:
+    if go_df is None or go_df.empty or "ontology" not in go_df.columns:
+        return pd.DataFrame(), None, "Count"
+
+    actual_qvalue_col = _get_qvalue_col(go_df, qvalue_col)
+    if actual_qvalue_col is None or count_col not in go_df.columns:
+        return pd.DataFrame(), actual_qvalue_col, "Count"
+
+    plot_df = go_df[go_df["ontology"] == ontology].copy()
+    if plot_df.empty:
+        return plot_df, actual_qvalue_col, "Count"
+
+    plot_df[actual_qvalue_col] = pd.to_numeric(plot_df[actual_qvalue_col], errors="coerce").fillna(1.0)
+    plot_df[count_col] = pd.to_numeric(plot_df[count_col], errors="coerce").fillna(0)
+    plot_df = plot_df[plot_df[count_col] > 0].copy()
+    if plot_df.empty:
+        return plot_df, actual_qvalue_col, "Count"
+
+    plot_df = plot_df.sort_values(
+        [actual_qvalue_col, count_col],
+        ascending=[True, False],
+    ).head(top_n)
+
+    term_col = "go_term_name" if "go_term_name" in plot_df.columns else "go_id"
+    plot_df["GO_term_wrapped"] = plot_df[term_col].fillna(plot_df.get("go_id", "")).apply(
+        lambda value: wrap_go_terms(value, width=label_wrap_width)
+    )
+
+    x_col = "Count"
+    if {"GeneRatio_numerator", "GeneRatio_denominator"}.issubset(plot_df.columns):
+        denominator = pd.to_numeric(plot_df["GeneRatio_denominator"], errors="coerce").replace(0, np.nan)
+        plot_df["GeneRatio_value"] = pd.to_numeric(
+            plot_df["GeneRatio_numerator"], errors="coerce"
+        ) / denominator
+        if plot_df["GeneRatio_value"].notna().any():
+            x_col = "GeneRatio_value"
+    elif "GeneRatio" in plot_df.columns:
+        plot_df["GeneRatio_value"] = plot_df["GeneRatio"].apply(_parse_ratio_to_float)
+        if plot_df["GeneRatio_value"].notna().any():
+            x_col = "GeneRatio_value"
+
+    if "BgRatio_numerator" in plot_df.columns:
+        bg_count = pd.to_numeric(plot_df["BgRatio_numerator"], errors="coerce").replace(0, np.nan)
+        plot_df["RichFactor"] = plot_df[count_col] / bg_count
+        if plot_df["RichFactor"].notna().any():
+            x_col = "RichFactor"
+
+    plot_df = plot_df.iloc[::-1].copy()
+    return plot_df, actual_qvalue_col, x_col
+
+
+def _qvalue_norm(values) -> plt.Normalize:
+    values = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+    if values.empty:
+        return plt.Normalize(vmin=0, vmax=1)
+    vmin = float(values.min())
+    vmax = float(values.max())
+    if vmax == vmin:
+        vmin = 0.0
+        vmax = max(vmax, 1e-6)
+    return plt.Normalize(vmin=vmin, vmax=vmax)
+
+
+def _add_count_legend(ax, counts, bubble_min_size: int, bubble_max_size: int):
+    counts = pd.Series(counts).dropna().astype(int)
+    if counts.empty:
+        return
+
+    legend_counts = sorted(set([
+        int(counts.min()),
+        int(counts.median()),
+        int(counts.max()),
+    ]))
+    legend_sizes = _scale_bubble_size(
+        legend_counts,
+        min_size=bubble_min_size,
+        max_size=bubble_max_size,
+    )
+    handles = [
+        ax.scatter(
+            [],
+            [],
+            s=size,
+            facecolors="#555555",
+            edgecolors="black",
+            linewidths=0.45,
+            alpha=0.88,
+        )
+        for size in legend_sizes
+    ]
+    ax.legend(
+        handles,
+        [str(count) for count in legend_counts],
+        title="Count",
+        frameon=False,
+        loc="lower left",
+        bbox_to_anchor=(1.18, 0.02),
+        scatterpoints=1,
+        labelspacing=1.0,
+        borderpad=0.2,
+        handletextpad=0.8,
+        fontsize=9,
+        title_fontsize=10,
+    )
+
+
+def plot_go_barplot(
+    go_df: pd.DataFrame,
+    ontology: str,
+    top_n: int = 15,
+    qvalue_col: str = "qvalue",
+    count_col: str = "Count",
+    label_wrap_width: int = 35,
+):
+    plot_df, actual_qvalue_col, _ = _prepare_go_plot_df(
+        go_df=go_df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+    )
+    if plot_df.empty or actual_qvalue_col is None:
+        return None
+
+    height = max(4.8, 0.62 * len(plot_df) + 1.4)
+    fig = plt.figure(figsize=(10.8, height))
+    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.0, 0.055], wspace=0.08)
+    ax = fig.add_subplot(gs[0, 0])
+    cax = fig.add_subplot(gs[0, 1])
+
+    norm = _qvalue_norm(plot_df[actual_qvalue_col])
+    cmap = plt.cm.coolwarm_r
+
+    ax.barh(
+        plot_df["GO_term_wrapped"],
+        plot_df[count_col],
+        color=cmap(norm(plot_df[actual_qvalue_col].values)),
+        edgecolor="none",
+        height=0.72,
+    )
+
+    ax.set_title(f"{ontology} GO enrichment", fontsize=15, pad=12)
+    ax.set_xlabel("Count", fontsize=12)
+    ax.set_ylabel("GO term", fontsize=12)
+    ax.set_facecolor("#F1F3F5")
+    fig.patch.set_facecolor("white")
+    ax.grid(True, axis="x", color="white", linewidth=1.2, alpha=0.95)
+    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.75)
+    ax.set_axisbelow(True)
+    ax.set_xlim(0, max(float(plot_df[count_col].max()) * 1.12, 1))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(axis="both", labelsize=10)
+
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.set_label("qvalue", fontsize=12)
+    cbar.ax.tick_params(labelsize=10)
+
+    fig.subplots_adjust(left=0.34, right=0.90, top=0.88, bottom=0.14)
+    return fig
+
+
+def plot_go_bubbleplot(
+    go_df: pd.DataFrame,
+    ontology: str,
+    top_n: int = 15,
+    qvalue_col: str = "qvalue",
+    count_col: str = "Count",
+    label_wrap_width: int = 35,
+    bubble_min_size: int = 45,
+    bubble_max_size: int = 360,
+):
+    plot_df, actual_qvalue_col, x_col = _prepare_go_plot_df(
+        go_df=go_df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+    )
+    if plot_df.empty or actual_qvalue_col is None:
+        return None
+
+    height = max(4.8, 0.62 * len(plot_df) + 1.4)
+    fig = plt.figure(figsize=(10.8, height))
+    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.0, 0.055], wspace=0.08)
+    ax = fig.add_subplot(gs[0, 0])
+    cax = fig.add_subplot(gs[0, 1])
+
+    norm = _qvalue_norm(plot_df[actual_qvalue_col])
+    cmap = plt.cm.coolwarm_r
+    sizes = _scale_bubble_size(
+        plot_df[count_col].values,
+        min_size=bubble_min_size,
+        max_size=bubble_max_size,
+    )
+
+    x_values = pd.to_numeric(plot_df[x_col], errors="coerce").fillna(plot_df[count_col])
+    scatter = ax.scatter(
+        x_values,
+        plot_df["GO_term_wrapped"],
+        s=sizes,
+        c=plot_df[actual_qvalue_col],
+        cmap=cmap,
+        norm=norm,
+        alpha=0.94,
+        edgecolors="black",
+        linewidths=0.45,
+    )
+
+    x_label = {
+        "RichFactor": "RichFactor",
+        "GeneRatio_value": "GeneRatio",
+        "Count": "Count",
+    }.get(x_col, x_col)
+
+    ax.set_title(f"{ontology} GO bubble plot", fontsize=15, pad=12)
+    ax.set_xlabel(x_label, fontsize=12)
+    ax.set_ylabel("GO term", fontsize=12)
+    ax.set_facecolor("#F1F3F5")
+    fig.patch.set_facecolor("white")
+    ax.grid(True, color="white", linewidth=1.2, alpha=0.95)
+    ax.set_axisbelow(True)
+    ax.set_xlim(0, max(float(x_values.max()) * 1.14, 0.01))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(axis="both", labelsize=10)
+
+    cbar = fig.colorbar(scatter, cax=cax)
+    cbar.set_label("qvalue", fontsize=12)
+    cbar.ax.tick_params(labelsize=10)
+    _add_count_legend(ax, plot_df[count_col], bubble_min_size, bubble_max_size)
+
+    fig.subplots_adjust(left=0.34, right=0.84, top=0.88, bottom=0.14)
+    return fig
+
+
+def _figure_to_png_bytes(fig) -> bytes:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def create_go_bubbleplot_bytes(
+    df: pd.DataFrame,
+    ontology: str,
+    top_n: int = 15,
+    qvalue_col: str = "qvalue",
+    count_col: str = "Count",
+    label_wrap_width: int = 35,
+    bubble_min_size: int = 45,
+    bubble_max_size: int = 360,
+) -> Optional[bytes]:
+    fig = plot_go_bubbleplot(
+        go_df=df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+        bubble_min_size=bubble_min_size,
+        bubble_max_size=bubble_max_size,
+    )
+    if fig is None:
+        return None
+    return _figure_to_png_bytes(fig)
+
+
 def run_go_enrichment(
     gene_list: List[str],
     term2gene_path: str,
@@ -353,3 +678,24 @@ def create_go_barplot_bytes(
     plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
+
+
+def create_go_barplot_panel_bytes(
+    df: pd.DataFrame,
+    ontology: str,
+    top_n: int = 15,
+    qvalue_col: str = "qvalue",
+    count_col: str = "Count",
+    label_wrap_width: int = 35,
+) -> Optional[bytes]:
+    fig = plot_go_barplot(
+        go_df=df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+    )
+    if fig is None:
+        return None
+    return _figure_to_png_bytes(fig)

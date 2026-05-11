@@ -10,12 +10,12 @@ from app_shared import (
     run_cached_go_enrichment,
     show_large_input_notice,
 )
-from utils.go_enrichment import create_go_barplot_bytes
+from utils.go_enrichment import create_go_barplot_panel_bytes, create_go_bubbleplot_bytes
 
 
 def render():
     st.header("GO 富集分析")
-    st.caption("输入 DEG 列表（一行一个基因号），输出 GO 富集结果表和条形图。")
+    st.caption("输入 DEG 列表（一行一个基因号），输出 GO 富集结果表、条形图和气泡图。")
 
     uploaded_file = st.file_uploader("上传 DEG TXT 文件（一行一个基因号）", type=["txt"], key="file_go_deg")
     render_example_tools(
@@ -36,11 +36,20 @@ def render():
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        top_n = st.number_input("每个大类显示前 N 个 term", min_value=3, max_value=30, value=15, step=1)
+        top_n = st.number_input("每个大类显示前 N 个 term", min_value=5, max_value=30, value=15, step=1)
     with col2:
         padj_cutoff = st.number_input("FDR 阈值", min_value=0.0001, max_value=1.0, value=0.05, step=0.01, format="%.4f")
     with col3:
-        st.caption("GO 富集图使用 qvalue 表示显著性，qvalue 越小越显著。")
+        plot_type = st.radio(
+            "图形类型",
+            ["Bar plot", "Bubble plot", "Both"],
+            index=0,
+            horizontal=True,
+        )
+
+    with st.expander("绘图参数"):
+        label_wrap_width = st.number_input("GO term 换行宽度", min_value=20, max_value=70, value=35, step=5)
+        st.caption("GO 富集图使用 qvalue 表示显著性；qvalue 越小颜色越偏红，越显著。气泡图横轴优先使用 RichFactor。")
 
     min_size = st.number_input("最小 GO 基因集大小", min_value=1, max_value=50, value=3, step=1)
     max_size = st.number_input("最大 GO 基因集大小", min_value=10, max_value=10000, value=2000, step=10)
@@ -91,21 +100,71 @@ def render():
                     st.dataframe(sig_df, use_container_width=True)
 
                 plot_df = sig_df.copy()
+                if plot_df.empty:
+                    plot_df = results_df.copy()
+
                 for ontology, label in [("BP", "BP"), ("CC", "CC"), ("MF", "MF")]:
                     if plot_df.empty or plot_df[plot_df["ontology"] == ontology].empty:
                         st.info(f"{label} 类别未检测到显著富集的 GO term。")
 
-                plot_bytes = create_go_barplot_bytes(df=plot_df, top_n=top_n, plot_metric="qvalue")
+                show_bar = plot_type in {"Bar plot", "Both"}
+                show_bubble = plot_type in {"Bubble plot", "Both"}
 
-                if plot_bytes is not None:
+                if show_bar:
                     st.subheader("GO 富集条形图")
-                    st.image(plot_bytes, caption="GO enrichment barplot", use_container_width=True)
-                    st.download_button(
-                        "下载富集图 PNG",
-                        data=plot_bytes,
-                        file_name="GO_enrichment_barplot.png",
-                        mime="image/png",
-                    )
+                    for ontology in ["BP", "CC", "MF"]:
+                        barplot_bytes = create_go_barplot_panel_bytes(
+                            df=plot_df,
+                            ontology=ontology,
+                            top_n=top_n,
+                            qvalue_col="qvalue",
+                            count_col="Count",
+                            label_wrap_width=label_wrap_width,
+                        )
+                        if barplot_bytes is None:
+                            st.info(f"{ontology} 类别没有可绘制的 GO 富集条形图。")
+                            continue
+
+                        st.image(
+                            barplot_bytes,
+                            caption=f"{ontology} GO enrichment barplot",
+                            use_container_width=True,
+                        )
+                        st.download_button(
+                            f"下载 {ontology} GO 条形图 PNG",
+                            data=barplot_bytes,
+                            file_name=f"GO_{ontology}_enrichment_barplot.png",
+                            mime="image/png",
+                            key=f"download_go_{ontology}_barplot",
+                        )
+
+                if show_bubble:
+                    st.subheader("GO 富集气泡图")
+                    for ontology in ["BP", "CC", "MF"]:
+                        bubbleplot_bytes = create_go_bubbleplot_bytes(
+                            df=plot_df,
+                            ontology=ontology,
+                            top_n=top_n,
+                            qvalue_col="qvalue",
+                            count_col="Count",
+                            label_wrap_width=label_wrap_width,
+                        )
+                        if bubbleplot_bytes is None:
+                            st.info(f"{ontology} 类别没有可绘制的 GO 富集气泡图。")
+                            continue
+
+                        st.image(
+                            bubbleplot_bytes,
+                            caption=f"{ontology} GO bubble plot",
+                            use_container_width=True,
+                        )
+                        st.download_button(
+                            f"下载 {ontology} GO 气泡图 PNG",
+                            data=bubbleplot_bytes,
+                            file_name=f"GO_{ontology}_enrichment_bubbleplot.png",
+                            mime="image/png",
+                            key=f"download_go_{ontology}_bubbleplot",
+                        )
 
                 st.download_button(
                     "下载全部结果 TSV",
