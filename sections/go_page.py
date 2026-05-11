@@ -49,7 +49,7 @@ def render():
 
     with st.expander("绘图参数"):
         label_wrap_width = st.number_input("GO term 换行宽度", min_value=20, max_value=70, value=35, step=5)
-        st.caption("GO 富集图使用 qvalue 表示显著性；qvalue 越小颜色越偏红，越显著。气泡图横轴优先使用 RichFactor。")
+        st.caption("GO 富集图使用 qvalue 映射颜色；qvalue 越小颜色越偏红，越显著。气泡图横轴优先使用 RichFactor。")
 
     min_size = st.number_input("最小 GO 基因集大小", min_value=1, max_value=50, value=3, step=1)
     max_size = st.number_input("最大 GO 基因集大小", min_value=10, max_value=10000, value=2000, step=10)

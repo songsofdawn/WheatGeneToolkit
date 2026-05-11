@@ -324,7 +324,7 @@ def _qvalue_norm(values) -> plt.Normalize:
     return plt.Normalize(vmin=vmin, vmax=vmax)
 
 
-def _add_count_legend(ax, counts, bubble_min_size: int, bubble_max_size: int):
+def _add_count_legend(lax, counts, bubble_min_size: int, bubble_max_size: int):
     counts = pd.Series(counts).dropna().astype(int)
     if counts.empty:
         return
@@ -340,30 +340,30 @@ def _add_count_legend(ax, counts, bubble_min_size: int, bubble_max_size: int):
         max_size=bubble_max_size,
     )
     handles = [
-        ax.scatter(
+        lax.scatter(
             [],
             [],
             s=size,
-            facecolors="#555555",
+            facecolors="black",
             edgecolors="black",
             linewidths=0.45,
-            alpha=0.88,
+            alpha=0.95,
         )
         for size in legend_sizes
     ]
-    ax.legend(
+    lax.legend(
         handles,
         [str(count) for count in legend_counts],
         title="Count",
         frameon=False,
-        loc="lower left",
-        bbox_to_anchor=(1.18, 0.02),
+        loc="center",
+        bbox_to_anchor=(0.82, 0.5),
         scatterpoints=1,
         labelspacing=1.0,
         borderpad=0.2,
         handletextpad=0.8,
-        fontsize=9,
-        title_fontsize=10,
+        fontsize=8,
+        title_fontsize=9,
     )
 
 
@@ -386,11 +386,20 @@ def plot_go_barplot(
     if plot_df.empty or actual_qvalue_col is None:
         return None
 
-    height = max(4.8, 0.62 * len(plot_df) + 1.4)
-    fig = plt.figure(figsize=(10.8, height))
-    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.0, 0.055], wspace=0.08)
-    ax = fig.add_subplot(gs[0, 0])
-    cax = fig.add_subplot(gs[0, 1])
+    height = max(6, 0.45 * len(plot_df))
+
+    fig = plt.figure(figsize=(8.4, height))
+    gs = fig.add_gridspec(
+        nrows=5,
+        ncols=2,
+        width_ratios=[1.0, 0.055],
+        height_ratios=[0.14, 0.46, 0.06, 0.20, 0.14],
+        wspace=0.08,
+        hspace=0.05,
+    )
+
+    ax = fig.add_subplot(gs[:, 0])
+    cax = fig.add_subplot(gs[1, 1])
 
     norm = _qvalue_norm(plot_df[actual_qvalue_col])
     cmap = plt.cm.coolwarm_r
@@ -400,16 +409,16 @@ def plot_go_barplot(
         plot_df[count_col],
         color=cmap(norm(plot_df[actual_qvalue_col].values)),
         edgecolor="none",
-        height=0.72,
+        height=0.75,
     )
 
-    ax.set_title(f"{ontology} GO enrichment", fontsize=15, pad=12)
+    ax.set_title(f"{ontology} GO enrichment", fontsize=12, pad=10)
     ax.set_xlabel("Count", fontsize=12)
-    ax.set_ylabel("GO term", fontsize=12)
-    ax.set_facecolor("#F1F3F5")
+    ax.set_ylabel("")
+    ax.set_facecolor("#EBEBEB")
     fig.patch.set_facecolor("white")
     ax.grid(True, axis="x", color="white", linewidth=1.2, alpha=0.95)
-    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.75)
+    ax.grid(True, axis="y", color="white", linewidth=0.8, alpha=0.85)
     ax.set_axisbelow(True)
     ax.set_xlim(0, max(float(plot_df[count_col].max()) * 1.12, 1))
 
@@ -420,10 +429,9 @@ def plot_go_barplot(
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cax)
-    cbar.set_label("qvalue", fontsize=12)
-    cbar.ax.tick_params(labelsize=10)
+    cbar.set_label("qvalue", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
 
-    fig.subplots_adjust(left=0.34, right=0.90, top=0.88, bottom=0.14)
     return fig
 
 
@@ -448,11 +456,22 @@ def plot_go_bubbleplot(
     if plot_df.empty or actual_qvalue_col is None:
         return None
 
-    height = max(4.8, 0.62 * len(plot_df) + 1.4)
-    fig = plt.figure(figsize=(10.8, height))
-    gs = fig.add_gridspec(nrows=1, ncols=2, width_ratios=[1.0, 0.055], wspace=0.08)
-    ax = fig.add_subplot(gs[0, 0])
-    cax = fig.add_subplot(gs[0, 1])
+    height = max(6, 0.45 * len(plot_df))
+
+    fig = plt.figure(figsize=(8.4, height))
+    gs = fig.add_gridspec(
+        nrows=5,
+        ncols=2,
+        width_ratios=[1.0, 0.055],
+        height_ratios=[0.14, 0.46, 0.06, 0.20, 0.14],
+        wspace=0.08,
+        hspace=0.05,
+    )
+
+    ax = fig.add_subplot(gs[:, 0])
+    cax = fig.add_subplot(gs[1, 1])
+    lax = fig.add_subplot(gs[3, 1])
+    lax.axis("off")
 
     norm = _qvalue_norm(plot_df[actual_qvalue_col])
     cmap = plt.cm.coolwarm_r
@@ -470,7 +489,7 @@ def plot_go_bubbleplot(
         c=plot_df[actual_qvalue_col],
         cmap=cmap,
         norm=norm,
-        alpha=0.94,
+        alpha=0.95,
         edgecolors="black",
         linewidths=0.45,
     )
@@ -481,10 +500,10 @@ def plot_go_bubbleplot(
         "Count": "Count",
     }.get(x_col, x_col)
 
-    ax.set_title(f"{ontology} GO bubble plot", fontsize=15, pad=12)
+    ax.set_title(f"{ontology} GO bubble plot", fontsize=12, pad=10)
     ax.set_xlabel(x_label, fontsize=12)
-    ax.set_ylabel("GO term", fontsize=12)
-    ax.set_facecolor("#F1F3F5")
+    ax.set_ylabel("")
+    ax.set_facecolor("#EBEBEB")
     fig.patch.set_facecolor("white")
     ax.grid(True, color="white", linewidth=1.2, alpha=0.95)
     ax.set_axisbelow(True)
@@ -495,11 +514,10 @@ def plot_go_bubbleplot(
     ax.tick_params(axis="both", labelsize=10)
 
     cbar = fig.colorbar(scatter, cax=cax)
-    cbar.set_label("qvalue", fontsize=12)
-    cbar.ax.tick_params(labelsize=10)
-    _add_count_legend(ax, plot_df[count_col], bubble_min_size, bubble_max_size)
+    cbar.set_label("qvalue", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+    _add_count_legend(lax, plot_df[count_col], bubble_min_size, bubble_max_size)
 
-    fig.subplots_adjust(left=0.34, right=0.84, top=0.88, bottom=0.14)
     return fig
 
 
@@ -633,7 +651,7 @@ def create_go_barplot_bytes(
         n_panels,
         1,
         figsize=figsize or (9.5, fig_height),
-        constrained_layout=True,
+        constrained_layout=False,
     )
 
     if n_panels == 1:
@@ -669,7 +687,9 @@ def create_go_barplot_bytes(
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, fraction=0.025, pad=0.02)
+    fig.subplots_adjust(left=0.34, right=0.82, top=0.95, bottom=0.08, hspace=0.48)
+    cax = fig.add_axes([0.86, 0.42, 0.024, 0.22])
+    cbar = fig.colorbar(sm, cax=cax)
     cbar.set_label("qvalue", fontsize=10)
     cbar.ax.tick_params(labelsize=8)
 
