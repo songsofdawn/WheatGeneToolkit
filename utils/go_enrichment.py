@@ -324,6 +324,58 @@ def _qvalue_norm(values) -> plt.Normalize:
     return plt.Normalize(vmin=vmin, vmax=vmax)
 
 
+def _add_neg_log10_qvalue(plot_df: pd.DataFrame, qvalue_col: str) -> pd.DataFrame:
+    plot_df = plot_df.copy()
+    qvalues = pd.to_numeric(plot_df[qvalue_col], errors="coerce").fillna(1.0)
+    qvalues = qvalues.clip(lower=1e-300)
+    plot_df["neg_log10_qvalue"] = -np.log10(qvalues)
+    return plot_df
+
+
+def _build_significance_color_mapping(values, min_span: float = 1e-3):
+    """
+    Build per-panel color values and a matching colorbar.
+
+    Normal panels use their own -log10(qvalue) min/max range. If the values are
+    nearly tied, rank-based color values keep visible contrast while colorbar
+    tick labels still show representative -log10(qvalue) values.
+    """
+    raw = pd.to_numeric(pd.Series(values), errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    if len(raw) == 0:
+        return raw, plt.Normalize(vmin=0, vmax=1), None
+
+    vmin = float(np.nanmin(raw))
+    vmax = float(np.nanmax(raw))
+    span = vmax - vmin
+    unique_count = len(np.unique(np.round(raw, 8)))
+
+    if len(raw) > 1 and (span < min_span or unique_count <= 2):
+        ranks = pd.Series(raw).rank(method="average", pct=True).to_numpy(dtype=float)
+        color_values = ranks
+        norm = plt.Normalize(vmin=0.0, vmax=1.0)
+        tick_positions = np.array([0.0, 0.5, 1.0])
+        tick_labels = [
+            f"{np.quantile(raw, q):.2f}".rstrip("0").rstrip(".")
+            for q in [0.0, 0.5, 1.0]
+        ]
+        return color_values, norm, (tick_positions, tick_labels)
+
+    if span < min_span:
+        vmin -= 0.5
+        vmax += 0.5
+
+    return raw, plt.Normalize(vmin=vmin, vmax=vmax), None
+
+
+def _format_short_colorbar(cbar, fallback_ticks=None):
+    cbar.set_label("-log10(qvalue)", fontsize=9)
+    cbar.ax.tick_params(labelsize=8)
+    if fallback_ticks is not None:
+        tick_positions, tick_labels = fallback_ticks
+        cbar.set_ticks(tick_positions)
+        cbar.set_ticklabels(tick_labels)
+
+
 def _add_count_legend(lax, counts, bubble_min_size: int, bubble_max_size: int):
     counts = pd.Series(counts).dropna().astype(int)
     if counts.empty:
@@ -386,6 +438,7 @@ def plot_go_barplot(
     if plot_df.empty or actual_qvalue_col is None:
         return None
 
+    plot_df = _add_neg_log10_qvalue(plot_df, actual_qvalue_col)
     height = max(6, 0.45 * len(plot_df))
 
     fig = plt.figure(figsize=(8.4, height))
@@ -401,13 +454,15 @@ def plot_go_barplot(
     ax = fig.add_subplot(gs[:, 0])
     cax = fig.add_subplot(gs[1, 1])
 
-    norm = _qvalue_norm(plot_df[actual_qvalue_col])
-    cmap = plt.cm.coolwarm_r
+    color_values, norm, fallback_ticks = _build_significance_color_mapping(
+        plot_df["neg_log10_qvalue"]
+    )
+    cmap = plt.cm.coolwarm
 
     ax.barh(
         plot_df["GO_term_wrapped"],
         plot_df[count_col],
-        color=cmap(norm(plot_df[actual_qvalue_col].values)),
+        color=cmap(norm(color_values)),
         edgecolor="none",
         height=0.75,
     )
@@ -429,8 +484,7 @@ def plot_go_barplot(
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cax)
-    cbar.set_label("qvalue", fontsize=9)
-    cbar.ax.tick_params(labelsize=8)
+    _format_short_colorbar(cbar, fallback_ticks=fallback_ticks)
 
     return fig
 
@@ -456,6 +510,7 @@ def plot_go_bubbleplot(
     if plot_df.empty or actual_qvalue_col is None:
         return None
 
+    plot_df = _add_neg_log10_qvalue(plot_df, actual_qvalue_col)
     height = max(6, 0.45 * len(plot_df))
 
     fig = plt.figure(figsize=(8.4, height))
@@ -473,8 +528,10 @@ def plot_go_bubbleplot(
     lax = fig.add_subplot(gs[3, 1])
     lax.axis("off")
 
-    norm = _qvalue_norm(plot_df[actual_qvalue_col])
-    cmap = plt.cm.coolwarm_r
+    color_values, norm, fallback_ticks = _build_significance_color_mapping(
+        plot_df["neg_log10_qvalue"]
+    )
+    cmap = plt.cm.coolwarm
     sizes = _scale_bubble_size(
         plot_df[count_col].values,
         min_size=bubble_min_size,
@@ -486,7 +543,7 @@ def plot_go_bubbleplot(
         x_values,
         plot_df["GO_term_wrapped"],
         s=sizes,
-        c=plot_df[actual_qvalue_col],
+        c=color_values,
         cmap=cmap,
         norm=norm,
         alpha=0.95,
@@ -514,8 +571,7 @@ def plot_go_bubbleplot(
     ax.tick_params(axis="both", labelsize=10)
 
     cbar = fig.colorbar(scatter, cax=cax)
-    cbar.set_label("qvalue", fontsize=9)
-    cbar.ax.tick_params(labelsize=8)
+    _format_short_colorbar(cbar, fallback_ticks=fallback_ticks)
     _add_count_legend(lax, plot_df[count_col], bubble_min_size, bubble_max_size)
 
     return fig
