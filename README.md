@@ -1,8 +1,8 @@
 # WheatGeneToolkit / 小麦基因批量处理工具
 
-🌾 **WheatGeneToolkit** is an integrated web-based toolkit for wheat gene annotation, gene ID conversion, sequence retrieval, homolog search, promoter extraction, JASPAR Plants promoter motif scanning, and GO/KEGG enrichment analysis.
+🌾 **WheatGeneToolkit** is an integrated web-based toolkit for wheat gene annotation, gene ID conversion, sequence retrieval, homolog search, promoter extraction, JASPAR Plants promoter motif scanning, volcano plots, and GO/KEGG enrichment analysis.
 
-🌾 **WheatGeneToolkit / 小麦基因批量处理工具** 是一个面向小麦功能基因组学研究的在线工具平台，集成了基因功能注释、基因号转换、序列下载、同源基因检索、启动子序列提取、JASPAR Plants 启动子 motif 扫描、GO 富集分析和 KEGG 富集分析等常用功能。
+🌾 **WheatGeneToolkit / 小麦基因批量处理工具** 是一个面向小麦功能基因组学研究的在线工具平台，集成了基因功能注释、基因号转换、序列下载、同源基因检索、启动子序列提取、JASPAR Plants 启动子 motif 扫描、火山图分析、GO 富集分析和 KEGG 富集分析等常用功能。
 
 Online app / 在线访问：
 
@@ -24,7 +24,7 @@ Pre-launch notes:
 
 - The production query backend is `data/db/manifest.json` plus the partitioned SQLite files under `data/db/`; the old `wheat_toolkit.db` is only a source/legacy construction file.
 - If the database bundle is missing, the app will show a friendly message asking you to check `data/db/manifest.json` and the SQLite shard files.
-- Batch gene input is supported for gene info, sequence, homolog, promoter, GO, and KEGG modules. Very large inputs may take longer; test with a small list before formal analysis.
+- Batch gene input is supported for gene info, sequence, homolog, promoter, GO, and KEGG modules. The volcano plot module supports txt/tsv/csv differential expression tables. Very large inputs may take longer; test with a small list before formal analysis.
 - Example Chinese Spring IDs: `TraesCS2D02G571200`, `TraesCS5B02G233300`, `TraesCS6A02G189300`. Example Fielder ID: `TraesFLD5B01G105200`.
 - Empty sequence/promoter results do not create FASTA downloads; check whether the gene ID exists, whether the species/version matches, and whether the database bundle is complete.
 
@@ -32,7 +32,7 @@ Pre-launch notes:
 
 - 当前线上查询后端是 `data/db/manifest.json` 和 `data/db/` 下的 SQLite 分库；旧的 `wheat_toolkit.db` 仅作为历史单库或构建来源。
 - 如果数据库文件缺失，网站会提示检查 `data/db/manifest.json` 和 SQLite 分库文件。
-- gene info、序列、同源、启动子、GO、KEGG 均支持批量输入；输入很多基因时可能需要等待，正式分析前建议先用少量基因测试。
+- gene info、序列、同源、启动子、GO、KEGG 均支持批量输入；火山图模块支持 txt/tsv/csv 差异表达结果表。输入很多基因时可能需要等待，正式分析前建议先用少量数据测试。
 - 示例中国春基因：`TraesCS2D02G571200`、`TraesCS5B02G233300`、`TraesCS6A02G189300`。示例 Fielder 基因：`TraesFLD5B01G105200`。
 - 序列或启动子查询没有成功结果时不会生成 FASTA 下载文件，请检查基因 ID、物种版本和数据库文件是否完整。
 
@@ -350,15 +350,16 @@ GO 富集分析模块输出内容包括：
 - Full GO enrichment result table / GO 富集结果总表
 - Significant GO term table / 显著 GO 条目表
 - GO enrichment bar plot / GO 富集条形图
+- GO enrichment bubble plot / GO 富集气泡图
 - Analysis summary table / 分析摘要表
 
 The enrichment analysis is based on local wheat GO annotation files and uses hypergeometric testing with multiple-testing correction.
 
 GO 富集分析基于本地小麦 GO 注释文件，使用超几何检验进行富集分析，并进行多重检验校正。
 
-The GO enrichment plot uses qvalue as the significance indicator. By default, it shows the top 15 most significant terms by qvalue for each GO ontology category (BP, CC, and MF), and this number can be adjusted on the page. Smaller qvalue means stronger enrichment significance. The plot style is kept close to the KEGG enrichment plots for easier comparison.
+The GO enrichment plots use -log₁₀(q-value) as the color significance indicator. By default, each GO ontology category (BP, CC, and MF) shows the top terms ranked by q-value, and this number can be adjusted on the page. Smaller q-value means stronger enrichment significance. The plot style is kept close to the KEGG enrichment plots for easier comparison.
 
-GO 富集图使用 qvalue 表示显著性，qvalue 越小表示富集越显著。默认情况下，每个 GO 大类（BP、CC、MF）展示 qvalue 最显著的前 15 个 term，可在页面中调整；图形风格已尽量与 KEGG 富集图保持一致，便于比较。
+GO 富集图使用 -log₁₀(q-value) 作为颜色显著性指标。默认情况下，每个 GO 大类（BP、CC、MF）展示 q-value 最显著的前若干个 term，可在页面中调整；q-value 越小表示富集越显著。图形风格已尽量与 KEGG 富集图保持一致，便于比较。
 
 Local GO annotation files are stored in:
 
@@ -610,7 +611,105 @@ Notes:
 - 一个 KO 编号也可能参与多个 KEGG pathway。
 - KEGG 富集结果说明某些通路在输入基因对应的 KO 中显著偏多。
 - KEGG 富集结果不能直接说明通路被激活或被抑制。
-- 如果需要判断通路上调或下调，需要结合 RNA-seq 的 log2FoldChange、表达趋势和具体生物学背景进一步解释。
+- 如果需要判断通路上调或下调，需要结合 RNA-seq 的 log₂FoldChange、表达趋势和具体生物学背景进一步解释。
+
+---
+
+### 10. Volcano plot / 火山图分析
+
+Upload or paste a differential expression result table and draw a volcano plot from two required numeric columns: log₂FC and p-value. A gene ID column is optional and is used for gene-list downloads and optional labels.
+
+上传或粘贴差异表达结果表后，可使用两个必需数值列绘制火山图：log₂FC 和 p-value。gene ID 列为可选项，用于下载基因列表和可选标注。
+
+Supported input:
+
+支持输入：
+
+- Upload `.txt`, `.tsv`, or `.csv` files / 上传 `.txt`、`.tsv` 或 `.csv` 文件
+- Paste tab-, comma-, or whitespace-separated tables with a header row / 粘贴带表头的制表符、逗号或空白分隔表格
+- Use the built-in example file `data/example_volcano_plot_genes_list.txt` / 使用内置示例文件 `data/example_volcano_plot_genes_list.txt`
+
+Required and optional columns:
+
+必需列和可选列：
+
+| Column type | Description | 中文说明 |
+| --- | --- | --- |
+| `gene_id` | Optional gene identifier column for labels and gene-list downloads | 可选基因号列，用于标注和下载基因列表 |
+| `log2FC` | Required log₂ fold-change column | 必需的 log₂ 倍数变化列 |
+| `pvalue` | Required p-value column; adjusted p-value, q-value, or FDR columns can also be selected manually | 必需的 p-value 列；也可手动选择 padj、q-value 或 FDR 等列 |
+
+Commonly recognized column names include `gene_id`, `GeneID`, `gene`, `log2FC`, `log2FoldChange`, `log2_fc`, `fold_change`, `pvalue`, `p_value`, `padj`, `qvalue`, and `fdr`. If automatic detection is not correct, columns can be selected manually on the page.
+
+程序可自动识别常见列名，例如 `gene_id`、`GeneID`、`gene`、`log2FC`、`log2FoldChange`、`log2_fc`、`fold_change`、`pvalue`、`p_value`、`padj`、`qvalue` 和 `fdr`。如果自动识别不准确，可在页面中手动选择列。
+
+The module automatically handles `NA`, empty values, non-numeric values, and invalid p-values outside `(0, 1]`. It computes -log₁₀(p-value), classifies genes as up-regulated, down-regulated, or not significant, and uses a soft-compressed display scale so extreme p-values or log₂FC values do not crush the main point cloud.
+
+该模块会自动处理 `NA`、空值、非数字值以及不在 `(0, 1]` 范围内的非法 p-value。程序会计算 -log₁₀(p-value)，并按照阈值将基因分为上调、下调和不显著。图形显示使用软压缩坐标轴，避免极端 p-value 或 log₂FC 把主体点云压扁。
+
+Plot parameters:
+
+绘图参数：
+
+- `log₂FC cutoff`: default `1.0`, used to define up- and down-regulated genes / 默认 `1.0`，用于定义上调和下调基因
+- `p-value cutoff`: default `0.05`, used as the significance threshold / 默认 `0.05`，用于显著性阈值
+- `top label N`: label the top genes ranked by significance and absolute fold change / 标注按显著性和绝对 fold change 排名靠前的基因
+- `point size` and `alpha`: control point size and transparency / 控制点大小和透明度
+- `y-axis cap`: automatic or manual cap for extremely small p-values / 对极小 p-value 对应的高 -log₁₀(p-value) 进行自动或手动截断显示
+
+Volcano plot workflow:
+
+火山图分析流程：
+
+```text
+Upload or paste differential expression table
+        ↓
+Select gene_id, log₂FC, and p-value columns
+        ↓
+Clean invalid rows and compute -log₁₀(p-value)
+        ↓
+Classify genes by log₂FC and p-value cutoffs
+        ↓
+Draw volcano plot and summarize DEG counts
+        ↓
+Download PNG, cleaned CSV, and gene lists
+```
+
+```text
+上传或粘贴差异表达结果表
+        ↓
+选择 gene_id、log₂FC 和 p-value 列
+        ↓
+清洗非法行并计算 -log₁₀(p-value)
+        ↓
+根据 log₂FC 和 p-value 阈值划分基因类别
+        ↓
+绘制火山图并统计 DEG 数量
+        ↓
+下载 PNG、清洗后 CSV 和基因列表
+```
+
+Downloads include:
+
+下载内容包括：
+
+- Cleaned volcano result CSV / 清洗后的火山图结果 CSV
+- Up-regulated gene list / 上调基因列表
+- Down-regulated gene list / 下调基因列表
+- Significant DEG list / 显著差异基因列表
+- Volcano plot PNG / 火山图 PNG
+
+Notes:
+
+注意事项：
+
+- The volcano plot is a visualization of differential expression results and does not perform RNA-seq statistical testing by itself.
+- The direction of regulation is determined by the selected log₂FC column, so make sure the comparison direction matches the experimental design.
+- If an adjusted p-value or FDR column is selected as the p-value column, the significance threshold should be interpreted accordingly.
+
+- 火山图模块用于可视化已有差异表达结果，本身不执行 RNA-seq 差异分析统计检验。
+- 上调或下调方向由所选 log₂FC 列决定，请确认比较方向与实验设计一致。
+- 如果选择 padj、q-value 或 FDR 作为 p-value 列，应按对应统计含义解释显著性阈值。
 
 ---
 
@@ -708,6 +807,7 @@ Then the program opens only the corresponding small SQLite database.
 │
 ├── data/
 │   ├── TipCode.jpg
+│   ├── example_volcano_plot_genes_list.txt
 │   ├── db/
 │   ├── go_mapping/
 │   ├── kegg_mapping/
@@ -738,6 +838,7 @@ Then the program opens only the corresponding small SQLite database.
 │   ├── fielder_promoter_page.py
 │   ├── cs_promoter_page.py
 │   ├── motif_page.py
+│   ├── volcano_page.py
 │   ├── go_page.py
 │   └── kegg_page.py
 │
@@ -745,6 +846,7 @@ Then the program opens only the corresponding small SQLite database.
     ├── db_query.py
     ├── go_enrichment.py
     ├── jaspar_pwm_scan.py
+    ├── volcano_plot.py
     └── kegg_enrichment.py
 ```
 
@@ -848,9 +950,24 @@ Fielder 基因号：
 TraesFLD5B01G105200
 ```
 
+Volcano plot table:
+
+火山图表格：
+
+```text
+gene_id	log2FC	pvalue
+TraesCS2D02G571200	1.83	0.00042
+TraesCS5B02G233300	-1.36	0.013
+TraesCS1A02G000100	0.22	0.58
+```
+
 For batch analysis, use a TXT file with one gene ID per line.
 
-批量分析时，请使用 TXT 文件，并保证每行一个基因号。
+For volcano plot analysis, use a txt/tsv/csv table with a header row and at least log₂FC and p-value columns.
+
+批量基因列表分析时，请使用 TXT 文件，并保证每行一个基因号。
+
+火山图分析时，请使用带表头的 txt/tsv/csv 表格，并至少包含 log₂FC 和 p-value 两列。
 
 ---
 

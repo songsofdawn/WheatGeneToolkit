@@ -101,7 +101,7 @@ def scale_bubble_size(counts, min_size=25, max_size=220):
 
 def get_x_cap(values, clip=True, mode="quantile", quantile=0.95, fixed_value=30, min_x_cap=5):
     """
-    获取 -log10(P-value) 的截断上限。
+    获取 -log₁₀(P-value) 的截断上限。
     截断是为了避免极端显著通路把横轴拉得过长。
     """
     values = np.asarray(values, dtype=float)

@@ -49,7 +49,7 @@ def render():
         use_sig_only = st.checkbox(
             "优先显示显著通路",
             value=True,
-            help="如果存在 pvalue 小于阈值的通路，则优先使用显著通路绘图；否则展示全部结果中 pvalue 最小的通路。",
+            help="如果存在 p-value 小于阈值的通路，则优先使用显著通路绘图；否则展示全部结果中 p-value 最小的通路。",
         )
 
     col4, col5 = st.columns(2)
@@ -62,9 +62,9 @@ def render():
         col6, col7, col8 = st.columns(3)
         with col6:
             clip_minus_log10_p = st.checkbox(
-                "截断极端 -log10(P-value)",
+                "截断极端 -log₁₀(P-value)",
                 value=True,
-                help="建议开启，避免极端小 pvalue 把横轴拉得过长。",
+                help="建议开启，避免极端小 p-value 把横轴拉得过长。",
             )
         with col7:
             clip_quantile = st.number_input("截断分位数", min_value=0.50, max_value=1.00, value=0.95, step=0.01, format="%.2f")

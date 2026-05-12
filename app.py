@@ -11,6 +11,7 @@ from sections import (
     motif_page,
     readme_page,
     sequences_page,
+    volcano_page,
 )
 from utils.db_query import DatabaseUnavailableError
 
@@ -22,6 +23,7 @@ TOOL_LABELS = [
     "Fielder 基因 → 启动子序列",
     "中国春启动子抓取",
     "JASPAR Plants 启动子 motif 分析",
+    "火山图分析",
     "GO富集分析",
     "KEGG富集分析",
 ]
@@ -34,6 +36,7 @@ PAGE_RENDERERS = {
     "Fielder 基因 → 启动子序列": fielder_promoter_page.render,
     "中国春启动子抓取": cs_promoter_page.render,
     "JASPAR Plants 启动子 motif 分析": motif_page.render,
+    "火山图分析": volcano_page.render,
     "GO富集分析": go_page.render,
     "KEGG富集分析": kegg_page.render,
 }

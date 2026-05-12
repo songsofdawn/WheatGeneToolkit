@@ -49,7 +49,7 @@ def render():
 
     with st.expander("绘图参数"):
         label_wrap_width = st.number_input("GO term 换行宽度", min_value=20, max_value=70, value=35, step=5)
-        st.caption("GO 富集图使用 -log10(qvalue) 映射颜色；数值越大表示 qvalue 越小，颜色越偏红。颜色范围会根据当前 BP/CC/MF 图中展示的 term 自适应调整，因此不同图之间的色带范围可能略有不同，主要用于比较同一张图内部的相对显著性。")
+        st.caption("GO 富集图使用 -log₁₀(q-value) 映射颜色；数值越大表示 q-value 越小，颜色越偏红。颜色范围会根据当前 BP/CC/MF 图中展示的 term 自适应调整，因此不同图之间的色带范围可能略有不同，主要用于比较同一张图内部的相对显著性。")
 
     min_size = st.number_input("最小 GO 基因集大小", min_value=1, max_value=50, value=3, step=1)
     max_size = st.number_input("最大 GO 基因集大小", min_value=10, max_value=10000, value=2000, step=10)

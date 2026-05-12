@@ -279,10 +279,16 @@ def _prepare_go_plot_df(
     if plot_df.empty:
         return plot_df, actual_qvalue_col, "Count"
 
-    plot_df = plot_df.sort_values(
-        [actual_qvalue_col, count_col],
-        ascending=[True, False],
-    ).head(top_n)
+    sort_cols = []
+    ascending = []
+    if "pvalue" in plot_df.columns:
+        plot_df["pvalue"] = pd.to_numeric(plot_df["pvalue"], errors="coerce").fillna(1.0)
+        sort_cols.append("pvalue")
+        ascending.append(True)
+    sort_cols.extend([actual_qvalue_col, count_col])
+    ascending.extend([True, False])
+
+    plot_df = plot_df.sort_values(sort_cols, ascending=ascending).head(top_n)
 
     term_col = "go_term_name" if "go_term_name" in plot_df.columns else "go_id"
     plot_df["GO_term_wrapped"] = plot_df[term_col].fillna(plot_df.get("go_id", "")).apply(
@@ -368,7 +374,7 @@ def _build_significance_color_mapping(values, min_span: float = 1e-3):
 
 
 def _format_short_colorbar(cbar, fallback_ticks=None):
-    cbar.set_label("-log10(qvalue)", fontsize=9)
+    cbar.set_label(r"$-\log_{10}(q\mathrm{-value})$", fontsize=9)
     cbar.ax.tick_params(labelsize=8)
     if fallback_ticks is not None:
         tick_positions, tick_labels = fallback_ticks
@@ -746,7 +752,7 @@ def create_go_barplot_bytes(
     fig.subplots_adjust(left=0.34, right=0.82, top=0.95, bottom=0.08, hspace=0.48)
     cax = fig.add_axes([0.86, 0.42, 0.024, 0.22])
     cbar = fig.colorbar(sm, cax=cax)
-    cbar.set_label("qvalue", fontsize=10)
+    cbar.set_label("q-value", fontsize=10)
     cbar.ax.tick_params(labelsize=8)
 
     buf = io.BytesIO()
