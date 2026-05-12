@@ -155,37 +155,7 @@ Supported outputs include:
 
 ---
 
-### 5. Chinese Spring promoter extraction / 中国春启动子序列提取
-
-Input Chinese Spring gene IDs and retrieve upstream promoter sequences.
-
-输入中国春基因号后，可批量获取其启动子序列。
-
-Current promoter definition:
-
-当前启动子定义：
-
-```text
-2000 bp upstream of ATG
-```
-
-Features:
-
-功能特点：
-
-- Fixed promoter length of 2000 bp / 固定提取 ATG 上游 2000 bp
-- Strand-aware extraction / 考虑正负链方向
-- Reverse-complement handling for negative-strand genes / 对负链基因进行反向互补处理
-- FASTA output / 支持 FASTA 格式下载
-- Batch processing / 支持批量处理
-
-For negative-strand genes, the output sequence is reverse-complemented and presented in the transcriptional 5' to 3' direction.
-
-对于负链基因，输出序列已经按照转录方向进行反向互补处理，最终结果统一为启动子 5' 到 3' 方向。
-
----
-
-### 6. Fielder promoter extraction / Fielder 启动子序列提取
+### 5. Fielder promoter extraction / Fielder 启动子序列提取
 
 Input Fielder gene IDs and retrieve Fielder promoter sequences.
 
@@ -216,6 +186,36 @@ Features:
 - Strand-aware extraction / 考虑正负链方向
 - Reverse-complement handling for negative-strand genes / 对负链基因进行反向互补处理
 - FASTA output / 支持 FASTA 格式下载
+
+---
+
+### 6. Chinese Spring promoter extraction / 中国春启动子序列提取
+
+Input Chinese Spring gene IDs and retrieve upstream promoter sequences.
+
+输入中国春基因号后，可批量获取其启动子序列。
+
+Current promoter definition:
+
+当前启动子定义：
+
+```text
+2000 bp upstream of ATG
+```
+
+Features:
+
+功能特点：
+
+- Fixed promoter length of 2000 bp / 固定提取 ATG 上游 2000 bp
+- Strand-aware extraction / 考虑正负链方向
+- Reverse-complement handling for negative-strand genes / 对负链基因进行反向互补处理
+- FASTA output / 支持 FASTA 格式下载
+- Batch processing / 支持批量处理
+
+For negative-strand genes, the output sequence is reverse-complemented and presented in the transcriptional 5' to 3' direction.
+
+对于负链基因，输出序列已经按照转录方向进行反向互补处理，最终结果统一为启动子 5' 到 3' 方向。
 
 ---
 
@@ -337,7 +337,105 @@ Streamlit 页面会提示是否已加载轻量级阈值表。如果所选 thresh
 
 ---
 
-### 8. GO enrichment analysis / GO 富集分析
+### 8. Volcano plot / 火山图分析
+
+Upload or paste a differential expression result table and draw a volcano plot from two required numeric columns: log₂FC and p-value. A gene ID column is optional and is used for gene-list downloads and optional labels.
+
+上传或粘贴差异表达结果表后，可使用两个必需数值列绘制火山图：log₂FC 和 p-value。gene ID 列为可选项，用于下载基因列表和可选标注。
+
+Supported input:
+
+支持输入：
+
+- Upload `.txt`, `.tsv`, or `.csv` files / 上传 `.txt`、`.tsv` 或 `.csv` 文件
+- Paste tab-, comma-, or whitespace-separated tables with a header row / 粘贴带表头的制表符、逗号或空白分隔表格
+- Use the built-in example file `data/example_volcano_plot_genes_list.txt` / 使用内置示例文件 `data/example_volcano_plot_genes_list.txt`
+
+Required and optional columns:
+
+必需列和可选列：
+
+| Column type | Description | 中文说明 |
+| --- | --- | --- |
+| `gene_id` | Optional gene identifier column for labels and gene-list downloads | 可选基因号列，用于标注和下载基因列表 |
+| `log2FC` | Required log₂ fold-change column | 必需的 log₂ 倍数变化列 |
+| `pvalue` | Required p-value column; adjusted p-value, q-value, or FDR columns can also be selected manually | 必需的 p-value 列；也可手动选择 padj、q-value 或 FDR 等列 |
+
+Commonly recognized column names include `gene_id`, `GeneID`, `gene`, `log2FC`, `log2FoldChange`, `log2_fc`, `fold_change`, `pvalue`, `p_value`, `padj`, `qvalue`, and `fdr`. If automatic detection is not correct, columns can be selected manually on the page.
+
+程序可自动识别常见列名，例如 `gene_id`、`GeneID`、`gene`、`log2FC`、`log2FoldChange`、`log2_fc`、`fold_change`、`pvalue`、`p_value`、`padj`、`qvalue` 和 `fdr`。如果自动识别不准确，可在页面中手动选择列。
+
+The module automatically handles `NA`, empty values, non-numeric values, and invalid p-values outside `(0, 1]`. It computes -log₁₀(p-value), classifies genes as up-regulated, down-regulated, or not significant, and uses a soft-compressed display scale so extreme p-values or log₂FC values do not crush the main point cloud.
+
+该模块会自动处理 `NA`、空值、非数字值以及不在 `(0, 1]` 范围内的非法 p-value。程序会计算 -log₁₀(p-value)，并按照阈值将基因分为上调、下调和不显著。图形显示使用软压缩坐标轴，避免极端 p-value 或 log₂FC 把主体点云压扁。
+
+Plot parameters:
+
+绘图参数：
+
+- `log₂FC cutoff`: default `1.0`, used to define up- and down-regulated genes / 默认 `1.0`，用于定义上调和下调基因
+- `p-value cutoff`: default `0.05`, used as the significance threshold / 默认 `0.05`，用于显著性阈值
+- `top label N`: label the top genes ranked by significance and absolute fold change / 标注按显著性和绝对 fold change 排名靠前的基因
+- `point size` and `alpha`: control point size and transparency / 控制点大小和透明度
+- `y-axis cap`: automatic or manual cap for extremely small p-values / 对极小 p-value 对应的高 -log₁₀(p-value) 进行自动或手动截断显示
+
+Volcano plot workflow:
+
+火山图分析流程：
+
+```text
+Upload or paste differential expression table
+        ↓
+Select gene_id, log₂FC, and p-value columns
+        ↓
+Clean invalid rows and compute -log₁₀(p-value)
+        ↓
+Classify genes by log₂FC and p-value cutoffs
+        ↓
+Draw volcano plot and summarize DEG counts
+        ↓
+Download PNG, cleaned CSV, and gene lists
+```
+
+```text
+上传或粘贴差异表达结果表
+        ↓
+选择 gene_id、log₂FC 和 p-value 列
+        ↓
+清洗非法行并计算 -log₁₀(p-value)
+        ↓
+根据 log₂FC 和 p-value 阈值划分基因类别
+        ↓
+绘制火山图并统计 DEG 数量
+        ↓
+下载 PNG、清洗后 CSV 和基因列表
+```
+
+Downloads include:
+
+下载内容包括：
+
+- Cleaned volcano result CSV / 清洗后的火山图结果 CSV
+- Up-regulated gene list / 上调基因列表
+- Down-regulated gene list / 下调基因列表
+- Significant DEG list / 显著差异基因列表
+- Volcano plot PNG / 火山图 PNG
+
+Notes:
+
+注意事项：
+
+- The volcano plot is a visualization of differential expression results and does not perform RNA-seq statistical testing by itself.
+- The direction of regulation is determined by the selected log₂FC column, so make sure the comparison direction matches the experimental design.
+- If an adjusted p-value or FDR column is selected as the p-value column, the significance threshold should be interpreted accordingly.
+
+- 火山图模块用于可视化已有差异表达结果，本身不执行 RNA-seq 差异分析统计检验。
+- 上调或下调方向由所选 log₂FC 列决定，请确认比较方向与实验设计一致。
+- 如果选择 padj、q-value 或 FDR 作为 p-value 列，应按对应统计含义解释显著性阈值。
+
+---
+
+### 9. GO enrichment analysis / GO 富集分析
 
 Input a DEG list with one gene ID per line and perform GO enrichment analysis.
 
@@ -424,7 +522,7 @@ Hypergeometric enrichment test
         ↓
 Multiple-testing correction
         ↓
-Output result tables and bar plot
+Output result tables, bar plot, and bubble plot
 ```
 
 ```text
@@ -438,7 +536,7 @@ Output result tables and bar plot
         ↓
 进行多重检验校正
         ↓
-输出富集结果表和条形图
+输出富集结果表、条形图和气泡图
 ```
 
 Notes:
@@ -457,7 +555,7 @@ Notes:
 
 ---
 
-### 9. KEGG enrichment analysis / KEGG 富集分析
+### 10. KEGG enrichment analysis / KEGG 富集分析
 
 Input a DEG list with one gene ID per line and perform KEGG pathway enrichment analysis.
 
@@ -612,104 +710,6 @@ Notes:
 - KEGG 富集结果说明某些通路在输入基因对应的 KO 中显著偏多。
 - KEGG 富集结果不能直接说明通路被激活或被抑制。
 - 如果需要判断通路上调或下调，需要结合 RNA-seq 的 log₂FoldChange、表达趋势和具体生物学背景进一步解释。
-
----
-
-### 10. Volcano plot / 火山图分析
-
-Upload or paste a differential expression result table and draw a volcano plot from two required numeric columns: log₂FC and p-value. A gene ID column is optional and is used for gene-list downloads and optional labels.
-
-上传或粘贴差异表达结果表后，可使用两个必需数值列绘制火山图：log₂FC 和 p-value。gene ID 列为可选项，用于下载基因列表和可选标注。
-
-Supported input:
-
-支持输入：
-
-- Upload `.txt`, `.tsv`, or `.csv` files / 上传 `.txt`、`.tsv` 或 `.csv` 文件
-- Paste tab-, comma-, or whitespace-separated tables with a header row / 粘贴带表头的制表符、逗号或空白分隔表格
-- Use the built-in example file `data/example_volcano_plot_genes_list.txt` / 使用内置示例文件 `data/example_volcano_plot_genes_list.txt`
-
-Required and optional columns:
-
-必需列和可选列：
-
-| Column type | Description | 中文说明 |
-| --- | --- | --- |
-| `gene_id` | Optional gene identifier column for labels and gene-list downloads | 可选基因号列，用于标注和下载基因列表 |
-| `log2FC` | Required log₂ fold-change column | 必需的 log₂ 倍数变化列 |
-| `pvalue` | Required p-value column; adjusted p-value, q-value, or FDR columns can also be selected manually | 必需的 p-value 列；也可手动选择 padj、q-value 或 FDR 等列 |
-
-Commonly recognized column names include `gene_id`, `GeneID`, `gene`, `log2FC`, `log2FoldChange`, `log2_fc`, `fold_change`, `pvalue`, `p_value`, `padj`, `qvalue`, and `fdr`. If automatic detection is not correct, columns can be selected manually on the page.
-
-程序可自动识别常见列名，例如 `gene_id`、`GeneID`、`gene`、`log2FC`、`log2FoldChange`、`log2_fc`、`fold_change`、`pvalue`、`p_value`、`padj`、`qvalue` 和 `fdr`。如果自动识别不准确，可在页面中手动选择列。
-
-The module automatically handles `NA`, empty values, non-numeric values, and invalid p-values outside `(0, 1]`. It computes -log₁₀(p-value), classifies genes as up-regulated, down-regulated, or not significant, and uses a soft-compressed display scale so extreme p-values or log₂FC values do not crush the main point cloud.
-
-该模块会自动处理 `NA`、空值、非数字值以及不在 `(0, 1]` 范围内的非法 p-value。程序会计算 -log₁₀(p-value)，并按照阈值将基因分为上调、下调和不显著。图形显示使用软压缩坐标轴，避免极端 p-value 或 log₂FC 把主体点云压扁。
-
-Plot parameters:
-
-绘图参数：
-
-- `log₂FC cutoff`: default `1.0`, used to define up- and down-regulated genes / 默认 `1.0`，用于定义上调和下调基因
-- `p-value cutoff`: default `0.05`, used as the significance threshold / 默认 `0.05`，用于显著性阈值
-- `top label N`: label the top genes ranked by significance and absolute fold change / 标注按显著性和绝对 fold change 排名靠前的基因
-- `point size` and `alpha`: control point size and transparency / 控制点大小和透明度
-- `y-axis cap`: automatic or manual cap for extremely small p-values / 对极小 p-value 对应的高 -log₁₀(p-value) 进行自动或手动截断显示
-
-Volcano plot workflow:
-
-火山图分析流程：
-
-```text
-Upload or paste differential expression table
-        ↓
-Select gene_id, log₂FC, and p-value columns
-        ↓
-Clean invalid rows and compute -log₁₀(p-value)
-        ↓
-Classify genes by log₂FC and p-value cutoffs
-        ↓
-Draw volcano plot and summarize DEG counts
-        ↓
-Download PNG, cleaned CSV, and gene lists
-```
-
-```text
-上传或粘贴差异表达结果表
-        ↓
-选择 gene_id、log₂FC 和 p-value 列
-        ↓
-清洗非法行并计算 -log₁₀(p-value)
-        ↓
-根据 log₂FC 和 p-value 阈值划分基因类别
-        ↓
-绘制火山图并统计 DEG 数量
-        ↓
-下载 PNG、清洗后 CSV 和基因列表
-```
-
-Downloads include:
-
-下载内容包括：
-
-- Cleaned volcano result CSV / 清洗后的火山图结果 CSV
-- Up-regulated gene list / 上调基因列表
-- Down-regulated gene list / 下调基因列表
-- Significant DEG list / 显著差异基因列表
-- Volcano plot PNG / 火山图 PNG
-
-Notes:
-
-注意事项：
-
-- The volcano plot is a visualization of differential expression results and does not perform RNA-seq statistical testing by itself.
-- The direction of regulation is determined by the selected log₂FC column, so make sure the comparison direction matches the experimental design.
-- If an adjusted p-value or FDR column is selected as the p-value column, the significance threshold should be interpreted accordingly.
-
-- 火山图模块用于可视化已有差异表达结果，本身不执行 RNA-seq 差异分析统计检验。
-- 上调或下调方向由所选 log₂FC 列决定，请确认比较方向与实验设计一致。
-- 如果选择 padj、q-value 或 FDR 作为 p-value 列，应按对应统计含义解释显著性阈值。
 
 ---
 
