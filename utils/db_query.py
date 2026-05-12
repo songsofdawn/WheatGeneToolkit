@@ -9,6 +9,11 @@ from typing import Optional, Any
 
 import pandas as pd
 
+try:
+    import streamlit as st
+except Exception:  # pragma: no cover - 兼容非 Streamlit 脚本环境
+    st = None
+
 
 # ============================================================
 # 项目路径与分库 manifest
@@ -139,9 +144,29 @@ def _connect_db(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         raise FileNotFoundError(f"找不到数据库文件: {db_path}")
 
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    return get_sqlite_connection(*_get_file_cache_key(db_path))
+
+
+def _open_readonly_connection(path_str: str, _mtime_ns: int, _size: int) -> sqlite3.Connection:
+    """
+    以只读 URI 打开 SQLite，并复用连接，减少 Streamlit Cloud 上的反复 IO。
+    """
+    db_path = Path(path_str)
+    if not db_path.exists():
+        raise FileNotFoundError(f"找不到数据库文件: {db_path}")
+
+    uri = db_path.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
     conn.execute("PRAGMA query_only = ON")
+    conn.execute("PRAGMA temp_store = MEMORY")
+    conn.execute("PRAGMA cache_size = -20000")
     return conn
+
+
+if st is not None:
+    get_sqlite_connection = st.cache_resource(show_spinner=False)(_open_readonly_connection)
+else:
+    get_sqlite_connection = lru_cache(maxsize=128)(_open_readonly_connection)
 
 
 @lru_cache(maxsize=2048)
@@ -153,10 +178,12 @@ def _read_sql_query_cached(
     params: tuple,
 ) -> pd.DataFrame:
     conn = _connect_db(Path(db_path_str))
-    try:
-        return pd.read_sql_query(sql, conn, params=params)
-    finally:
-        conn.close()
+    return pd.read_sql_query(sql, conn, params=params)
+
+
+def _read_sql_query_uncached(db_path: Path, sql: str, params: tuple = ()) -> pd.DataFrame:
+    conn = _connect_db(db_path)
+    return pd.read_sql_query(sql, conn, params=params)
 
 
 def get_connection(db_file: Optional[str] = None) -> sqlite3.Connection:
@@ -260,6 +287,112 @@ def _fetch_df(
         raise DatabaseUnavailableError(f"{DATABASE_MISSING_MESSAGE}\n缺失文件: {exc}") from exc
 
 
+def _chunked(values, chunk_size=800):
+    values = list(values)
+    for i in range(0, len(values), chunk_size):
+        yield values[i : i + chunk_size]
+
+
+def _placeholders(count: int) -> str:
+    return ",".join(["?"] * count)
+
+
+def _unique_preserve_order(values):
+    seen = set()
+    result = []
+    for value in values:
+        if value is None:
+            continue
+        value = str(value).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _fetch_in_from_db_path(
+    db_path: Path,
+    table: str,
+    column: str,
+    values,
+    order_by: Optional[str] = None,
+) -> pd.DataFrame:
+    values = _unique_preserve_order(values)
+    if not values:
+        return pd.DataFrame()
+
+    frames = []
+    quoted_table = _quote_ident(table)
+    quoted_col = _quote_ident(column)
+    for chunk in _chunked(values):
+        sql = f"""
+        SELECT *
+        FROM {quoted_table}
+        WHERE {quoted_col} IN ({_placeholders(len(chunk))})
+        """
+        if order_by:
+            sql += f"\nORDER BY {order_by}"
+        frames.append(_read_sql_query_uncached(db_path, sql, tuple(chunk)))
+
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _fetch_in_whole_table(
+    table: str,
+    column: str,
+    values,
+    order_by: Optional[str] = None,
+) -> pd.DataFrame:
+    db_path = _get_table_db_path(table)
+    return _fetch_in_from_db_path(db_path, table, column, values, order_by=order_by)
+
+
+def _fetch_in_sharded_table(
+    table: str,
+    column: str,
+    values,
+    order_by: Optional[str] = None,
+) -> pd.DataFrame:
+    groups = {}
+    for value in _unique_preserve_order(values):
+        db_path = _get_table_db_path(table, value)
+        groups.setdefault(db_path, []).append(value)
+
+    frames = [
+        _fetch_in_from_db_path(db_path, table, column, group_values, order_by=order_by)
+        for db_path, group_values in groups.items()
+    ]
+    frames = [df for df in frames if df is not None and not df.empty]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _add_input_order(df: pd.DataFrame, gene_ids, id_map: dict, result_id_col="primary_gene_id") -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    order_rows = []
+    for idx, input_gene_id in enumerate(gene_ids):
+        resolved_id = id_map.get(input_gene_id)
+        if resolved_id:
+            order_rows.append({
+                "input_gene_id": input_gene_id,
+                "input_order": idx,
+                result_id_col: resolved_id,
+            })
+
+    if not order_rows:
+        return pd.DataFrame()
+
+    order_df = pd.DataFrame(order_rows)
+    merged = order_df.merge(df, on=result_id_col, how="inner")
+    return merged.sort_values("input_order").reset_index(drop=True)
+
+
 # ============================================================
 # ID 转换
 # ============================================================
@@ -318,6 +451,200 @@ def get_primary_gene_id(input_id: str, db_file: Optional[str] = None) -> Optiona
             return df.loc[0, "primary_gene_id"]
 
     return None
+
+
+def _candidate_ids(input_id: Any) -> list[str]:
+    input_id = _normalize_input_id(input_id)
+    input_id_no_suffix = _remove_transcript_suffix(input_id)
+    return _unique_preserve_order([input_id, input_id_no_suffix])
+
+
+@lru_cache(maxsize=512)
+def _resolve_primary_gene_ids_many_cached(gene_ids_tuple: tuple) -> tuple:
+    gene_ids = [_normalize_input_id(gene_id) for gene_id in gene_ids_tuple if _normalize_input_id(gene_id)]
+    gene_ids = _unique_preserve_order(gene_ids)
+    candidate_by_input = {gene_id: _candidate_ids(gene_id) for gene_id in gene_ids}
+    all_candidates = _unique_preserve_order(
+        candidate for candidates in candidate_by_input.values() for candidate in candidates
+    )
+
+    alias_map = {}
+    primary_map = {}
+    v3_map = {}
+
+    if all_candidates:
+        alias_df = _fetch_in_whole_table("gene_alias", "alias_value", all_candidates)
+        if not alias_df.empty:
+            alias_map = dict(zip(alias_df["alias_value"], alias_df["primary_gene_id"]))
+
+        core_primary_df = _fetch_in_whole_table("gene_core", "primary_gene_id", all_candidates)
+        if not core_primary_df.empty:
+            primary_map = dict(zip(core_primary_df["primary_gene_id"], core_primary_df["primary_gene_id"]))
+
+        core_v3_df = _fetch_in_whole_table("gene_core", "gene_id_v3", all_candidates)
+        if not core_v3_df.empty:
+            v3_map = dict(zip(core_v3_df["gene_id_v3"], core_v3_df["primary_gene_id"]))
+
+    rows = []
+    for gene_id in gene_ids:
+        resolved = None
+        candidates = candidate_by_input.get(gene_id, [])
+        for candidate in candidates:
+            if candidate in alias_map:
+                resolved = alias_map[candidate]
+                break
+        if resolved is None:
+            for candidate in candidates:
+                if candidate in primary_map:
+                    resolved = primary_map[candidate]
+                    break
+        if resolved is None:
+            for candidate in candidates:
+                if candidate in v3_map:
+                    resolved = v3_map[candidate]
+                    break
+        rows.append((gene_id, resolved))
+
+    return tuple(rows)
+
+
+def resolve_primary_gene_ids_many(gene_ids) -> dict:
+    """
+    批量解析输入基因号到 primary_gene_id，保留输入顺序并缓存映射结果。
+    """
+    cleaned = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    return dict(_resolve_primary_gene_ids_many_cached(tuple(cleaned)))
+
+
+def get_gene_core_many(gene_ids) -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+    df = _fetch_in_whole_table("gene_core", "primary_gene_id", primary_ids)
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def get_gene_annotations_many(gene_ids) -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+    df = _fetch_in_whole_table("gene_annotation", "primary_gene_id", primary_ids)
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def get_transcript_core_many(gene_ids) -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+    df = _fetch_in_whole_table(
+        "transcript_core",
+        "primary_gene_id",
+        primary_ids,
+        order_by="primary_gene_id, is_canonical DESC, transcript_id ASC",
+    )
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def get_gene_sequence_resources_many(gene_ids) -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+    df = _fetch_in_sharded_table(
+        "gene_sequence_resource",
+        "primary_gene_id",
+        primary_ids,
+        order_by="primary_gene_id, transcript_id, sequence_type",
+    )
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def get_gene_promoters_many(gene_ids, genome="CS") -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    if str(genome).upper() == "FIELDER":
+        return get_fielder_promoters_many(gene_ids)
+
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+    df = _fetch_in_sharded_table("gene_promoter_sequence", "primary_gene_id", primary_ids)
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def get_fielder_promoters_many(gene_ids) -> pd.DataFrame:
+    gene_ids = _unique_preserve_order(_remove_transcript_suffix(gene_id) for gene_id in gene_ids)
+    id_map = {gene_id: gene_id for gene_id in gene_ids if gene_id}
+    df = _fetch_in_sharded_table("fielder_promoter_sequence", "primary_gene_id", gene_ids)
+    return _add_input_order(df, gene_ids, id_map, result_id_col="primary_gene_id")
+
+
+def _add_homolog_input_order(df: pd.DataFrame, gene_ids, id_map: dict) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    order_df = pd.DataFrame(
+        [
+            {"input_gene_id": input_gene_id, "input_order": idx, "cs_gene_id": primary_id}
+            for idx, input_gene_id in enumerate(gene_ids)
+            for primary_id in [id_map.get(input_gene_id)]
+            if primary_id
+        ]
+    )
+    if order_df.empty:
+        return pd.DataFrame()
+    return order_df.merge(df, on="cs_gene_id", how="inner").sort_values(
+        ["input_order", "rank_within_cs"]
+    ).reset_index(drop=True)
+
+
+def get_homologs_many(gene_ids) -> dict:
+    gene_ids = _unique_preserve_order(_normalize_input_id(gene_id) for gene_id in gene_ids)
+    id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+    primary_ids = _unique_preserve_order(id_map.values())
+
+    self_all = _fetch_in_whole_table(
+        "cs_self_homolog_map",
+        "cs_gene_id",
+        primary_ids,
+        order_by="cs_gene_id, CAST(rank_within_cs AS INTEGER), CAST(priority_score AS REAL) DESC",
+    )
+    fielder_all = _fetch_in_whole_table(
+        "homolog_map",
+        "cs_gene_id",
+        primary_ids,
+        order_by="cs_gene_id, CAST(rank_within_cs AS INTEGER), CAST(priority_score AS REAL) DESC",
+    )
+
+    self_all = _add_homolog_input_order(self_all, gene_ids, id_map)
+    fielder_all = _add_homolog_input_order(fielder_all, gene_ids, id_map)
+
+    self_best = (
+        self_all[self_all["is_best_hit"].astype(str) == "1"].copy()
+        if not self_all.empty and "is_best_hit" in self_all.columns
+        else pd.DataFrame()
+    )
+    fielder_best = (
+        fielder_all[fielder_all["is_best_hit"].astype(str) == "1"].copy()
+        if not fielder_all.empty and "is_best_hit" in fielder_all.columns
+        else pd.DataFrame()
+    )
+
+    found_primary_ids = set()
+    for df in [self_best, fielder_best]:
+        if not df.empty and "cs_gene_id" in df.columns:
+            found_primary_ids.update(df["cs_gene_id"].dropna().astype(str))
+
+    missing = [
+        gene_id
+        for gene_id in gene_ids
+        if not id_map.get(gene_id) or id_map.get(gene_id) not in found_primary_ids
+    ]
+
+    return {
+        "id_map": id_map,
+        "self_best": self_best,
+        "self_all": self_all,
+        "fielder_best": fielder_best,
+        "fielder_all": fielder_all,
+        "missing": missing,
+    }
 
 
 # ============================================================

@@ -1,8 +1,18 @@
+import time
+
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
-from utils.db_query import get_primary_gene_id, get_sequences
+from app_shared import (
+    EXAMPLE_CS_GENES,
+    as_text,
+    preprocess_gene_ids,
+    render_example_tools,
+    show_dataframe_preview,
+    show_input_cleanup_notice,
+    show_large_input_notice,
+)
+from utils.db_query import get_gene_sequence_resources_many, resolve_primary_gene_ids_many
 
 
 def render():
@@ -17,34 +27,38 @@ def render():
     )
     manual_input = st.text_area("或者手动输入基因号（每行一个）", key="input_sequences")
 
-    gene_ids = [g.strip() for g in read_gene_ids(uploaded_file, manual_input) if g.strip()]
+    gene_ids, cleanup_info = preprocess_gene_ids(uploaded_file, manual_input)
     if not gene_ids:
         st.info("请上传文件或输入基因号")
         st.stop()
+    show_input_cleanup_notice(cleanup_info)
 
     st.info(f"待查询基因数：{len(gene_ids)}")
     show_large_input_notice(len(gene_ids), task_name="序列查询", threshold=300)
 
     if st.button("获取序列（cDNA / CDS / Protein）", key="btn_sequences"):
+        started_at = time.perf_counter()
         cdna_records = []
         cds_records = []
         protein_records = []
         failed_genes = []
         summary_rows = []
 
-        progress = st.progress(0)
-        status_text = st.empty()
+        with st.spinner("正在批量获取 cDNA / CDS / protein 序列，请稍候..."):
+            id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+            all_seq_df = get_gene_sequence_resources_many(tuple(gene_ids))
 
-        for idx, input_gene_id in enumerate(gene_ids, 1):
-            status_text.text(f"正在处理: {input_gene_id} ({idx}/{len(gene_ids)})")
+        grouped = {
+            input_gene_id: group.copy()
+            for input_gene_id, group in all_seq_df.groupby("input_gene_id", sort=False)
+        } if not all_seq_df.empty else {}
 
-            primary_gene_id = get_primary_gene_id(input_gene_id)
-            seq_df = get_sequences(input_gene_id)
-
+        for input_gene_id in gene_ids:
+            primary_gene_id = id_map.get(input_gene_id)
+            seq_df = grouped.get(input_gene_id, pd.DataFrame())
             if seq_df.empty:
                 failed_genes.append(input_gene_id)
                 summary_rows.append([input_gene_id, "", 0, 0, 0])
-                progress.progress(idx / len(gene_ids))
                 continue
 
             cdna_df = seq_df[seq_df["sequence_type"] == "cdna"].copy()
@@ -77,15 +91,14 @@ def render():
             if len(cdna_df) == 0 and len(cds_df) == 0 and len(protein_df) == 0:
                 failed_genes.append(input_gene_id)
 
-            progress.progress(idx / len(gene_ids))
-
         summary_df = pd.DataFrame(
             summary_rows,
             columns=["输入基因号", "统一主键", "cDNA条数", "CDS条数", "Protein条数"],
         )
 
         st.success("序列查询完成")
-        st.dataframe(summary_df, use_container_width=True)
+        st.caption(f"查询用时：{time.perf_counter() - started_at:.2f} 秒")
+        show_dataframe_preview(summary_df, label="序列统计结果", key="show_all_sequence_summary")
         if cdna_records:
             st.download_button("下载 cDNA FASTA", "".join(cdna_records), "cdna_sequences.fasta", "text/plain")
         if cds_records:
@@ -103,6 +116,3 @@ def render():
 
         if failed_genes:
             st.warning(f"以下基因未获取到序列: {', '.join(failed_genes)}")
-
-        status_text.empty()
-        progress.empty()

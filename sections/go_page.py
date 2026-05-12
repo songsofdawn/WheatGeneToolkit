@@ -1,16 +1,51 @@
+import io
 import os
+import time
 
+import pandas as pd
 import streamlit as st
 
 from app_shared import (
     get_go_example_text,
     get_go_mapping_paths,
-    read_gene_ids,
+    preprocess_gene_ids,
     render_example_tools,
     run_cached_go_enrichment,
+    show_dataframe_preview,
+    show_input_cleanup_notice,
     show_large_input_notice,
 )
 from utils.go_enrichment import create_go_barplot_panel_bytes, create_go_bubbleplot_bytes
+
+
+def _df_cache_text(df):
+    return df.to_csv(index=False)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_go_barplot_bytes(df_text, ontology, top_n, qvalue_col, count_col, label_wrap_width):
+    df = pd.read_csv(io.StringIO(df_text))
+    return create_go_barplot_panel_bytes(
+        df=df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_go_bubbleplot_bytes(df_text, ontology, top_n, qvalue_col, count_col, label_wrap_width):
+    df = pd.read_csv(io.StringIO(df_text))
+    return create_go_bubbleplot_bytes(
+        df=df,
+        ontology=ontology,
+        top_n=top_n,
+        qvalue_col=qvalue_col,
+        count_col=count_col,
+        label_wrap_width=label_wrap_width,
+    )
 
 
 def render():
@@ -28,10 +63,11 @@ def render():
     )
     manual_input = st.text_area("或者手动输入 DEG（每行一个）", height=200, key="input_go_deg")
 
-    gene_ids = [g.strip() for g in read_gene_ids(uploaded_file, manual_input) if g.strip()]
+    gene_ids, cleanup_info = preprocess_gene_ids(uploaded_file, manual_input)
     if not gene_ids:
         st.info("请上传 DEG 文件或手动输入基因号")
         st.stop()
+    show_input_cleanup_notice(cleanup_info)
     show_large_input_notice(len(gene_ids), task_name="GO 富集分析", threshold=2000)
 
     col1, col2, col3 = st.columns(3)
@@ -71,6 +107,7 @@ def render():
     st.info(f"待分析基因数: {len(gene_ids)}")
 
     if st.button("开始 GO 富集分析", key="btn_go_enrichment"):
+        started_at = time.perf_counter()
         with st.spinner("正在进行 GO 富集分析，请稍候..."):
             try:
                 results_df, sig_df, summary_df = run_cached_go_enrichment(
@@ -89,19 +126,21 @@ def render():
                     st.stop()
 
                 st.success("GO 富集分析完成")
+                st.caption(f"富集分析用时：{time.perf_counter() - started_at:.2f} 秒")
                 st.subheader("分析摘要")
-                st.dataframe(summary_df, use_container_width=True)
+                show_dataframe_preview(summary_df, label="GO 分析摘要", key="show_all_go_summary")
 
                 st.subheader("显著富集结果")
                 if sig_df.empty:
                     st.warning("当前 FDR 阈值下没有显著富集条目，下面展示全部结果。")
-                    st.dataframe(results_df, use_container_width=True)
+                    show_dataframe_preview(results_df, label="GO 全部富集结果", key="show_all_go_results_no_sig")
                 else:
-                    st.dataframe(sig_df, use_container_width=True)
+                    show_dataframe_preview(sig_df, label="GO 显著富集结果", key="show_all_go_sig")
 
                 plot_df = sig_df.copy()
                 if plot_df.empty:
                     plot_df = results_df.copy()
+                plot_df_text = _df_cache_text(plot_df)
 
                 for ontology, label in [("BP", "BP"), ("CC", "CC"), ("MF", "MF")]:
                     if plot_df.empty or plot_df[plot_df["ontology"] == ontology].empty:
@@ -111,15 +150,16 @@ def render():
                 show_bubble = plot_type in {"Bubble plot", "Both"}
 
                 if show_bar:
+                    plot_started_at = time.perf_counter()
                     st.subheader("GO 富集条形图")
                     for ontology in ["BP", "CC", "MF"]:
-                        barplot_bytes = create_go_barplot_panel_bytes(
-                            df=plot_df,
-                            ontology=ontology,
-                            top_n=top_n,
-                            qvalue_col="qvalue",
-                            count_col="Count",
-                            label_wrap_width=label_wrap_width,
+                        barplot_bytes = _cached_go_barplot_bytes(
+                            plot_df_text,
+                            ontology,
+                            top_n,
+                            "qvalue",
+                            "Count",
+                            label_wrap_width,
                         )
                         if barplot_bytes is None:
                             st.info(f"{ontology} 类别没有可绘制的 GO 富集条形图。")
@@ -137,17 +177,19 @@ def render():
                             mime="image/png",
                             key=f"download_go_{ontology}_barplot",
                         )
+                    st.caption(f"GO 条形图生成用时：{time.perf_counter() - plot_started_at:.2f} 秒")
 
                 if show_bubble:
+                    plot_started_at = time.perf_counter()
                     st.subheader("GO 富集气泡图")
                     for ontology in ["BP", "CC", "MF"]:
-                        bubbleplot_bytes = create_go_bubbleplot_bytes(
-                            df=plot_df,
-                            ontology=ontology,
-                            top_n=top_n,
-                            qvalue_col="qvalue",
-                            count_col="Count",
-                            label_wrap_width=label_wrap_width,
+                        bubbleplot_bytes = _cached_go_bubbleplot_bytes(
+                            plot_df_text,
+                            ontology,
+                            top_n,
+                            "qvalue",
+                            "Count",
+                            label_wrap_width,
                         )
                         if bubbleplot_bytes is None:
                             st.info(f"{ontology} 类别没有可绘制的 GO 富集气泡图。")
@@ -165,6 +207,7 @@ def render():
                             mime="image/png",
                             key=f"download_go_{ontology}_bubbleplot",
                         )
+                    st.caption(f"GO 气泡图生成用时：{time.perf_counter() - plot_started_at:.2f} 秒")
 
                 st.download_button(
                     "下载全部结果 TSV",

@@ -1,13 +1,18 @@
+import time
+
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
-from utils.db_query import (
-    get_cs_self_all_hits,
-    get_cs_self_best_hit,
-    get_fielder_all_hits,
-    get_fielder_best_hit,
+from app_shared import (
+    EXAMPLE_CS_GENES,
+    as_text,
+    preprocess_gene_ids,
+    render_example_tools,
+    show_dataframe_preview,
+    show_input_cleanup_notice,
+    show_large_input_notice,
 )
+from utils.db_query import get_homologs_many
 
 
 def render():
@@ -22,37 +27,42 @@ def render():
     )
     manual_input = st.text_area("或者手动输入中国春基因号（每行一个）", height=200, key="input_blast")
 
-    gene_ids = [g.strip() for g in read_gene_ids(uploaded_file, manual_input) if g.strip()]
+    gene_ids, cleanup_info = preprocess_gene_ids(uploaded_file, manual_input)
     if not gene_ids:
         st.info("请上传文件或输入中国春基因号")
         st.stop()
+    show_input_cleanup_notice(cleanup_info)
 
     st.info(f"待查询基因数：{len(gene_ids)}")
     show_large_input_notice(len(gene_ids), task_name="同源基因查询", threshold=500)
 
     if st.button("开始查询同源基因", key="btn_blast"):
-        progress = st.progress(0)
-        status_text = st.empty()
+        started_at = time.perf_counter()
 
         self_best_rows = []
-        self_all_rows = []
         fld_best_rows = []
-        fld_all_rows = []
-        failed_genes = []
 
-        for idx, input_gene_id in enumerate(gene_ids, 1):
-            status_text.text(f"正在查询: {input_gene_id} ({idx}/{len(gene_ids)})")
+        with st.spinner("正在批量查询同源基因，请稍候..."):
+            homolog_results = get_homologs_many(tuple(gene_ids))
 
-            self_best_df = get_cs_self_best_hit(input_gene_id)
-            self_all_df_one = get_cs_self_all_hits(input_gene_id)
-            fld_best_df = get_fielder_best_hit(input_gene_id)
-            fld_all_df_one = get_fielder_all_hits(input_gene_id)
+        self_best_df = homolog_results["self_best"]
+        fld_best_df = homolog_results["fielder_best"]
+        self_all_df = homolog_results["self_all"]
+        fld_all_df = homolog_results["fielder_all"]
+        failed_genes = homolog_results["missing"]
 
-            if self_best_df.empty and fld_best_df.empty:
-                failed_genes.append(input_gene_id)
+        self_best_by_input = {
+            input_gene_id: group.iloc[0]
+            for input_gene_id, group in self_best_df.groupby("input_gene_id", sort=False)
+        } if not self_best_df.empty else {}
+        fld_best_by_input = {
+            input_gene_id: group.iloc[0]
+            for input_gene_id, group in fld_best_df.groupby("input_gene_id", sort=False)
+        } if not fld_best_df.empty else {}
 
-            if not self_best_df.empty:
-                r = self_best_df.iloc[0]
+        for input_gene_id in gene_ids:
+            if input_gene_id in self_best_by_input:
+                r = self_best_by_input[input_gene_id]
                 self_best_rows.append([
                     input_gene_id,
                     r.get("cs_gene_id", ""),
@@ -63,12 +73,9 @@ def render():
                     r.get("same_chr_num", ""),
                     r.get("priority_score", ""),
                 ])
-                tmp = self_all_df_one.copy()
-                tmp.insert(0, "input_gene_id", input_gene_id)
-                self_all_rows.append(tmp)
 
-            if not fld_best_df.empty:
-                r = fld_best_df.iloc[0]
+            if input_gene_id in fld_best_by_input:
+                r = fld_best_by_input[input_gene_id]
                 fld_best_rows.append([
                     input_gene_id,
                     r.get("cs_gene_id", ""),
@@ -79,11 +86,6 @@ def render():
                     r.get("same_chr_num", ""),
                     r.get("priority_score", ""),
                 ])
-                tmp = fld_all_df_one.copy()
-                tmp.insert(0, "input_gene_id", input_gene_id)
-                fld_all_rows.append(tmp)
-
-            progress.progress(idx / len(gene_ids))
 
         self_best_result_df = pd.DataFrame(
             self_best_rows,
@@ -94,16 +96,14 @@ def render():
             columns=["输入基因号", "中国春主键", "默认Fielder同源基因", "同源类型", "可信度", "同亚基因组", "同染色体号", "优先级分数"],
         )
 
-        self_all_df = pd.concat(self_all_rows, ignore_index=True) if self_all_rows else pd.DataFrame()
-        fld_all_df = pd.concat(fld_all_rows, ignore_index=True) if fld_all_rows else pd.DataFrame()
-
         st.success("查询完成")
+        st.caption(f"查询用时：{time.perf_counter() - started_at:.2f} 秒")
         st.subheader("中国春自身同源：默认最可信结果")
-        st.dataframe(self_best_result_df, use_container_width=True)
+        show_dataframe_preview(self_best_result_df, label="中国春自身同源默认结果", key="show_all_self_best")
 
         st.subheader("中国春自身同源：全部候选")
         if not self_all_df.empty:
-            st.dataframe(self_all_df, use_container_width=True)
+            show_dataframe_preview(self_all_df, label="中国春自身同源全部候选", key="show_all_self_all")
             st.download_button(
                 "下载中国春自身同源全部候选 CSV",
                 self_all_df.to_csv(index=False).encode("utf-8-sig"),
@@ -112,11 +112,11 @@ def render():
             )
 
         st.subheader("Fielder 同源：默认最可信结果")
-        st.dataframe(fld_best_result_df, use_container_width=True)
+        show_dataframe_preview(fld_best_result_df, label="Fielder 同源默认结果", key="show_all_fielder_best")
 
         st.subheader("Fielder 同源：全部候选")
         if not fld_all_df.empty:
-            st.dataframe(fld_all_df, use_container_width=True)
+            show_dataframe_preview(fld_all_df, label="Fielder 同源全部候选", key="show_all_fielder_all")
             st.download_button(
                 "下载 Fielder 同源全部候选 CSV",
                 fld_all_df.to_csv(index=False).encode("utf-8-sig"),
@@ -126,6 +126,3 @@ def render():
 
         if failed_genes:
             st.warning(f"以下基因未找到同源结果: {', '.join(failed_genes)}")
-
-        status_text.empty()
-        progress.empty()

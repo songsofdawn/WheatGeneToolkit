@@ -1,16 +1,71 @@
+import io
 import os
+import time
 
+import pandas as pd
 import streamlit as st
 
 from app_shared import (
     get_kegg_example_text,
     get_kegg_mapping_paths,
-    read_gene_ids,
+    preprocess_gene_ids,
     render_example_tools,
     run_cached_kegg_enrichment,
+    show_dataframe_preview,
+    show_input_cleanup_notice,
     show_large_input_notice,
 )
 from utils.kegg_enrichment import create_kegg_barplot_bytes, create_kegg_bubbleplot_bytes
+
+
+def _df_cache_text(df):
+    return df.to_csv(index=False)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_kegg_bubbleplot_bytes(
+    df_text,
+    top_n,
+    bubble_min_size,
+    bubble_max_size,
+    clip_minus_log10_p,
+    clip_quantile,
+    label_wrap_width,
+):
+    df = pd.read_csv(io.StringIO(df_text))
+    return create_kegg_bubbleplot_bytes(
+        df=df,
+        top_n=top_n,
+        bubble_min_size=bubble_min_size,
+        bubble_max_size=bubble_max_size,
+        clip_minus_log10_p=clip_minus_log10_p,
+        clip_mode="quantile",
+        clip_quantile=clip_quantile,
+        clip_fixed_value=30,
+        min_x_cap=5,
+        label_wrap_width=label_wrap_width,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_kegg_barplot_bytes(
+    df_text,
+    top_n,
+    clip_minus_log10_p,
+    clip_quantile,
+    label_wrap_width,
+):
+    df = pd.read_csv(io.StringIO(df_text))
+    return create_kegg_barplot_bytes(
+        df=df,
+        top_n=top_n,
+        clip_minus_log10_p=clip_minus_log10_p,
+        clip_mode="quantile",
+        clip_quantile=clip_quantile,
+        clip_fixed_value=30,
+        min_x_cap=5,
+        label_wrap_width=label_wrap_width,
+    )
 
 
 def render():
@@ -32,10 +87,11 @@ def render():
     )
     manual_input = st.text_area("或者手动输入 DEG（每行一个）", height=200, key="input_kegg_deg")
 
-    gene_ids = [g.strip() for g in read_gene_ids(uploaded_file, manual_input) if g.strip()]
+    gene_ids, cleanup_info = preprocess_gene_ids(uploaded_file, manual_input)
     if not gene_ids:
         st.info("请上传 DEG 文件或手动输入基因号")
         st.stop()
+    show_input_cleanup_notice(cleanup_info)
 
     st.info(f"待分析基因数: {len(gene_ids)}")
     show_large_input_notice(len(gene_ids), task_name="KEGG 富集分析", threshold=2000)
@@ -46,11 +102,18 @@ def render():
     with col2:
         pvalue_cutoff = st.number_input("P-value 阈值", min_value=0.0001, max_value=1.0, value=0.05, step=0.01, format="%.4f")
     with col3:
-        use_sig_only = st.checkbox(
-            "优先显示显著通路",
-            value=True,
-            help="如果存在 p-value 小于阈值的通路，则优先使用显著通路绘图；否则展示全部结果中 p-value 最小的通路。",
+        plot_type = st.radio(
+            "图形类型",
+            ["Bubble plot", "Bar plot", "Both"],
+            index=0,
+            horizontal=True,
         )
+
+    use_sig_only = st.checkbox(
+        "优先显示显著通路",
+        value=True,
+        help="如果存在 p-value 小于阈值的通路，则优先使用显著通路绘图；否则展示全部结果中 p-value 最小的通路。",
+    )
 
     col4, col5 = st.columns(2)
     with col4:
@@ -96,6 +159,7 @@ def render():
         st.code(pathway2name_path)
 
     if st.button("开始 KEGG 富集分析", key="btn_kegg_enrichment"):
+        started_at = time.perf_counter()
         with st.spinner("正在进行 KEGG 富集分析，请稍候..."):
             try:
                 results_df, sig_df, summary_df = run_cached_kegg_enrichment(
@@ -111,63 +175,67 @@ def render():
                 if results_df.empty:
                     st.warning("没有得到任何 KEGG 富集结果，请检查输入基因 ID 是否与 gene2ko_clean.tsv 中的基因 ID 一致。")
                     st.subheader("分析摘要")
-                    st.dataframe(summary_df, use_container_width=True)
+                    show_dataframe_preview(summary_df, label="KEGG 分析摘要", key="show_all_kegg_empty_summary")
                     st.stop()
 
                 st.success("KEGG 富集分析完成")
+                st.caption(f"富集分析用时：{time.perf_counter() - started_at:.2f} 秒")
                 st.subheader("分析摘要")
-                st.dataframe(summary_df, use_container_width=True)
+                show_dataframe_preview(summary_df, label="KEGG 分析摘要", key="show_all_kegg_summary")
 
                 st.subheader("显著富集结果")
                 if sig_df.empty:
                     st.warning("当前 P-value 阈值下没有显著富集通路，下面展示全部结果。")
-                    st.dataframe(results_df, use_container_width=True)
+                    show_dataframe_preview(results_df, label="KEGG 全部富集结果", key="show_all_kegg_results_no_sig")
                 else:
-                    st.dataframe(sig_df, use_container_width=True)
+                    show_dataframe_preview(sig_df, label="KEGG 显著富集结果", key="show_all_kegg_sig")
 
                 plot_df = sig_df if use_sig_only and not sig_df.empty else results_df
-                bubble_bytes = create_kegg_bubbleplot_bytes(
-                    df=plot_df,
-                    top_n=top_n,
-                    bubble_min_size=bubble_min_size,
-                    bubble_max_size=bubble_max_size,
-                    clip_minus_log10_p=clip_minus_log10_p,
-                    clip_mode="quantile",
-                    clip_quantile=clip_quantile,
-                    clip_fixed_value=30,
-                    min_x_cap=5,
-                    label_wrap_width=label_wrap_width,
-                )
-                barplot_bytes = create_kegg_barplot_bytes(
-                    df=plot_df,
-                    top_n=top_n,
-                    clip_minus_log10_p=clip_minus_log10_p,
-                    clip_mode="quantile",
-                    clip_quantile=clip_quantile,
-                    clip_fixed_value=30,
-                    min_x_cap=5,
-                    label_wrap_width=label_wrap_width,
-                )
+                plot_df_text = _df_cache_text(plot_df)
+                show_bubble = plot_type in {"Bubble plot", "Both"}
+                show_bar = plot_type in {"Bar plot", "Both"}
 
-                if bubble_bytes is not None:
+                if show_bubble:
+                    plot_started_at = time.perf_counter()
+                    bubble_bytes = _cached_kegg_bubbleplot_bytes(
+                        plot_df_text,
+                        top_n,
+                        bubble_min_size,
+                        bubble_max_size,
+                        clip_minus_log10_p,
+                        clip_quantile,
+                        label_wrap_width,
+                    )
                     st.subheader("KEGG 富集气泡图")
-                    st.image(bubble_bytes, caption="KEGG enrichment bubble plot", use_container_width=True)
-                    st.download_button(
-                        "下载 KEGG 气泡图 PNG",
-                        data=bubble_bytes,
-                        file_name="KEGG_enrichment_bubbleplot.png",
-                        mime="image/png",
-                    )
+                    if bubble_bytes is not None:
+                        st.image(bubble_bytes, caption="KEGG enrichment bubble plot", use_container_width=True)
+                        st.download_button(
+                            "下载 KEGG 气泡图 PNG",
+                            data=bubble_bytes,
+                            file_name="KEGG_enrichment_bubbleplot.png",
+                            mime="image/png",
+                        )
+                    st.caption(f"KEGG 气泡图生成用时：{time.perf_counter() - plot_started_at:.2f} 秒")
 
-                if barplot_bytes is not None:
-                    st.subheader("KEGG 富集条形图")
-                    st.image(barplot_bytes, caption="KEGG enrichment barplot", use_container_width=True)
-                    st.download_button(
-                        "下载 KEGG 条形图 PNG",
-                        data=barplot_bytes,
-                        file_name="KEGG_enrichment_barplot.png",
-                        mime="image/png",
+                if show_bar:
+                    plot_started_at = time.perf_counter()
+                    barplot_bytes = _cached_kegg_barplot_bytes(
+                        plot_df_text,
+                        top_n,
+                        clip_minus_log10_p,
+                        clip_quantile,
+                        label_wrap_width,
                     )
+                    st.subheader("KEGG 富集条形图")
+                    if barplot_bytes is not None:
+                        st.image(barplot_bytes, caption="KEGG enrichment barplot", use_container_width=True)
+                        st.download_button(
+                            "下载 KEGG 条形图 PNG",
+                            data=barplot_bytes,
+                            file_name="KEGG_enrichment_barplot.png",
+                            mime="image/png",
+                        )
+                    st.caption(f"KEGG 条形图生成用时：{time.perf_counter() - plot_started_at:.2f} 秒")
 
                 st.download_button(
                     "下载全部 KEGG 富集结果 TSV",

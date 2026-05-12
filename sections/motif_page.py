@@ -1,8 +1,10 @@
 from pathlib import Path
+import time
 
 import pandas as pd
 import streamlit as st
 
+from app_shared import show_dataframe_preview
 from utils.db_query import get_promoter
 from utils.jaspar_pwm_scan import (
     load_jaspar_pwm,
@@ -164,14 +166,13 @@ def _filter_motifs(motifs, keyword: str, min_motif_length: int = 6, min_total_ic
     return filtered
 
 
-def _threshold_option_label(option: str, payloads: dict) -> str:
+def _threshold_option_label(option: str) -> str:
     labels = {
         "uniform": "预计算均匀背景 A/C/G/T=0.25（推荐，速度快）",
         "cs_promoter": "Chinese Spring 启动子经验背景",
         "fielder_promoter": "Fielder 启动子经验背景",
     }
-    status = "已加载" if payloads.get(option) else "未找到"
-    return f"{labels[option]} - {status}"
+    return labels[option]
 
 
 def _build_summary(main_df: pd.DataFrame) -> pd.DataFrame:
@@ -236,23 +237,7 @@ def render():
         st.code(str(JASPAR_PWM_PATH))
         st.stop()
 
-    try:
-        motifs = _load_cached_motifs(str(JASPAR_PWM_PATH))
-    except Exception as exc:
-        st.error("读取 JASPAR Plants PWM JSON 失败。")
-        st.exception(exc)
-        st.stop()
-
-    threshold_payloads = _load_threshold_payloads()
-    loaded_thresholds = [key for key, payload in threshold_payloads.items() if payload]
-    if loaded_thresholds:
-        st.success("已加载轻量级背景阈值表，适合 Streamlit 快速分析。")
-    else:
-        st.warning(
-            "未找到轻量级背景阈值表。请先运行：python scripts/build_jaspar_background.py。"
-        )
-
-    st.info(f"已加载 JASPAR Plants PWM motifs: {len(motifs)}")
+    st.caption("JASPAR PWM 和 threshold JSON 会在点击开始扫描后按需加载，避免页面打开时进行重型 IO。")
 
     st.subheader("加载示例")
     st.caption(
@@ -307,19 +292,9 @@ def render():
             "背景阈值表",
             options=["uniform", "cs_promoter", "fielder_promoter"],
             index=0,
-            format_func=lambda option: _threshold_option_label(option, threshold_payloads),
+            format_func=_threshold_option_label,
         )
 
-    selected_thresholds = threshold_payloads.get(background_choice)
-    if selected_thresholds:
-        st.caption(
-            f"当前阈值表样本数: {selected_thresholds.get('n_samples', '未知')}；"
-            f"p-levels: {selected_thresholds.get('p_levels', [])}"
-        )
-    else:
-        st.error("当前选择的阈值表不存在。请先生成 threshold JSON 后再扫描。")
-
-    has_total_ic = _has_total_ic(motifs)
     with st.expander("高级筛选", expanded=False):
         motif_keyword = st.text_input(
             "按 matrix_id 或 TF name 关键词筛选 motif",
@@ -335,17 +310,14 @@ def render():
                 step=1,
             )
         with col_b:
-            if has_total_ic:
-                min_total_ic = st.number_input(
-                    "最小 total_ic",
-                    min_value=0.0,
-                    max_value=50.0,
-                    value=6.0,
-                    step=0.5,
-                )
-            else:
-                min_total_ic = None
-                st.caption("当前 PWM JSON 不含 total_ic 字段，仅使用 motif_length 过滤。")
+            min_total_ic = st.number_input(
+                "最小 total_ic",
+                min_value=0.0,
+                max_value=50.0,
+                value=6.0,
+                step=0.5,
+                help="如果 PWM JSON 不含 total_ic 字段，此筛选不会生效。",
+            )
         with col_c:
             top_n_per_motif_sequence = st.number_input(
                 "每个 motif 每条序列 top hits",
@@ -355,18 +327,25 @@ def render():
                 step=1,
             )
 
-    selected_motifs = _filter_motifs(
-        motifs,
-        keyword=motif_keyword,
-        min_motif_length=int(min_motif_length),
-        min_total_ic=min_total_ic,
-    )
-    st.caption(f"当前参与扫描的 motifs: {len(selected_motifs)}")
-
     if st.button("开始 JASPAR PWM 扫描", key="btn_jaspar_pwm_scan"):
+        started_at = time.perf_counter()
+        try:
+            motifs = _load_cached_motifs(str(JASPAR_PWM_PATH))
+        except Exception as exc:
+            st.error("读取 JASPAR Plants PWM JSON 失败。")
+            st.exception(exc)
+            st.stop()
+
+        threshold_payloads = _load_threshold_payloads()
+        selected_thresholds = threshold_payloads.get(background_choice)
         if not selected_thresholds:
             st.error("没有可用的轻量级背景阈值表。请先运行 python scripts/build_jaspar_background.py。")
             st.stop()
+
+        st.caption(
+            f"已加载 motifs: {len(motifs)}；当前阈值表样本数: {selected_thresholds.get('n_samples', '未知')}；"
+            f"p-levels: {selected_thresholds.get('p_levels', [])}"
+        )
 
         records = parse_fasta_or_plain(sequence_text)
         records = {name: seq for name, seq in records.items() if seq}
@@ -375,9 +354,16 @@ def render():
             st.warning("请粘贴 FASTA 或 DNA 序列后再开始扫描。")
             st.stop()
 
+        selected_motifs = _filter_motifs(
+            motifs,
+            keyword=motif_keyword,
+            min_motif_length=int(min_motif_length),
+            min_total_ic=min_total_ic,
+        )
         if not selected_motifs:
             st.warning("当前筛选条件下没有可扫描的 motif，请调整关键词、motif_length 或 total_ic。")
             st.stop()
+        st.caption(f"当前参与扫描的 motifs: {len(selected_motifs)}")
 
         total_length = sum(len(seq) for seq in records.values())
         st.info(
@@ -424,6 +410,7 @@ def render():
             f"扫描完成：候选 hits {len(candidate_df)} 个；"
             f"通过 p_level <= {p_level_cutoff:g} 的主结果 {len(main_df)} 个。"
         )
+        st.caption(f"motif 扫描用时：{time.perf_counter() - started_at:.2f} 秒")
 
         st.subheader("显著主结果表")
         st.caption(
@@ -438,7 +425,7 @@ def render():
                 "或使用更宽松的 p-level 阈值，但请谨慎解释。"
             )
         else:
-            st.dataframe(main_df[MAIN_COLUMNS], use_container_width=True)
+            show_dataframe_preview(main_df[MAIN_COLUMNS], label="JASPAR 显著主结果", key="show_all_jaspar_main")
             st.download_button(
                 "下载显著结果 CSV",
                 data=main_df.to_csv(index=False).encode("utf-8-sig"),
@@ -448,7 +435,7 @@ def render():
 
             summary_df = _build_summary(main_df)
             st.subheader("汇总表")
-            st.dataframe(summary_df, use_container_width=True)
+            show_dataframe_preview(summary_df, label="JASPAR 汇总结果", key="show_all_jaspar_summary")
             st.download_button(
                 "下载汇总结果 CSV",
                 data=summary_df.to_csv(index=False).encode("utf-8-sig"),
@@ -457,7 +444,7 @@ def render():
             )
 
         with st.expander("候选结果表：查看所有 relative score 初筛通过的 top hits", expanded=False):
-            st.dataframe(candidate_df, use_container_width=True)
+            show_dataframe_preview(candidate_df, label="JASPAR 全部候选结果", key="show_all_jaspar_candidates")
             st.download_button(
                 "下载全部候选结果 CSV",
                 data=candidate_df.to_csv(index=False).encode("utf-8-sig"),

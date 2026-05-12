@@ -29,7 +29,7 @@ ENV/
 
 # Streamlit local secrets and overrides
 .streamlit/secrets.toml
-.streamlit/config.toml
+!.streamlit/config.toml
 
 # Logs and temporary files
 *.log

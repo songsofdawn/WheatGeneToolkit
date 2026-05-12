@@ -1,9 +1,11 @@
 import os
+import time
+from io import StringIO
 
 import pandas as pd
 import streamlit as st
 
-from app_shared import DATA_DIR
+from app_shared import DATA_DIR, show_dataframe_preview
 from utils.volcano_plot import (
     auto_detect_columns,
     figure_to_png_bytes,
@@ -16,6 +18,28 @@ from utils.volcano_plot import (
 
 EXAMPLE_VOLCANO_PATH = os.path.join(DATA_DIR, "example_volcano_plot_genes_list.txt")
 EXAMPLE_VOLCANO_REL = "data/example_volcano_plot_genes_list.txt"
+
+
+@st.cache_data(show_spinner=False)
+def _cached_prepare_volcano_data(
+    df_text,
+    gene_id_col,
+    log2fc_col,
+    pvalue_col,
+    log2fc_cutoff,
+    pvalue_cutoff,
+    max_neg_log10_pvalue,
+):
+    df = pd.read_csv(StringIO(df_text))
+    return prepare_volcano_data(
+        df,
+        gene_id_col=gene_id_col,
+        log2fc_col=log2fc_col,
+        pvalue_col=pvalue_col,
+        log2fc_cutoff=log2fc_cutoff,
+        pvalue_cutoff=pvalue_cutoff,
+        max_neg_log10_pvalue=max_neg_log10_pvalue,
+    )
 
 
 def _load_example_text() -> str:
@@ -85,7 +109,7 @@ def render():
         st.stop()
 
     st.subheader("数据预览")
-    st.dataframe(df.head(20), use_container_width=True)
+    show_dataframe_preview(df, label="火山图输入数据", preview_rows=100, key="show_all_volcano_input")
     st.caption(f"原始行数：{len(df)}；原始列数：{len(df.columns)}")
 
     detected = auto_detect_columns(df)
@@ -140,6 +164,7 @@ def render():
     title = st.text_input("图标题", value="Volcano Plot")
 
     if st.button("生成火山图", key="btn_volcano_plot"):
+        started_at = time.perf_counter()
         if cap_mode == "自动":
             max_neg_log10_pvalue = None
         elif cap_mode == "不截断":
@@ -147,27 +172,28 @@ def render():
         else:
             max_neg_log10_pvalue = float(cap_mode)
 
-        volcano_df_no_cap = prepare_volcano_data(
-            df,
-            gene_id_col=gene_id_col,
-            log2fc_col=log2fc_col,
-            pvalue_col=pvalue_col,
-            log2fc_cutoff=log2fc_cutoff,
-            pvalue_cutoff=pvalue_cutoff,
-            max_neg_log10_pvalue=float("inf"),
+        df_text = df.to_csv(index=False)
+        volcano_df_no_cap = _cached_prepare_volcano_data(
+            df_text,
+            gene_id_col,
+            log2fc_col,
+            pvalue_col,
+            log2fc_cutoff,
+            pvalue_cutoff,
+            float("inf"),
         )
 
         if cap_mode == "自动" and not volcano_df_no_cap.empty:
             max_neg_log10_pvalue = infer_auto_y_cap(volcano_df_no_cap["neg_log10_pvalue_raw"])
 
-        volcano_df = prepare_volcano_data(
-            df,
-            gene_id_col=gene_id_col,
-            log2fc_col=log2fc_col,
-            pvalue_col=pvalue_col,
-            log2fc_cutoff=log2fc_cutoff,
-            pvalue_cutoff=pvalue_cutoff,
-            max_neg_log10_pvalue=max_neg_log10_pvalue,
+        volcano_df = _cached_prepare_volcano_data(
+            df_text,
+            gene_id_col,
+            log2fc_col,
+            pvalue_col,
+            log2fc_cutoff,
+            pvalue_cutoff,
+            max_neg_log10_pvalue,
         )
 
         if volcano_df.empty:
@@ -208,6 +234,7 @@ def render():
             st.stop()
 
         png_bytes = figure_to_png_bytes(fig)
+        st.caption(f"火山图处理和绘图用时：{time.perf_counter() - started_at:.2f} 秒")
         st.subheader("火山图")
         st.image(png_bytes, caption="Volcano Plot", use_container_width=True)
         st.download_button(
@@ -218,7 +245,7 @@ def render():
         )
 
         st.subheader("清洗后的结果表")
-        st.dataframe(volcano_df, use_container_width=True)
+        show_dataframe_preview(volcano_df, label="清洗后的火山图结果", key="show_all_volcano_result")
 
         up_genes = volcano_df.loc[volcano_df["regulation"] == "Up-regulated", "gene_id"]
         down_genes = volcano_df.loc[volcano_df["regulation"] == "Down-regulated", "gene_id"]

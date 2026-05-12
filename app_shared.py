@@ -1,9 +1,7 @@
 import os
+import re
 
 import streamlit as st
-
-from utils.go_enrichment import run_go_enrichment
-from utils.kegg_enrichment import run_kegg_enrichment
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -67,6 +65,8 @@ DEFAULT_KEGG_DEG_GENES = [
     "TraesCS7A02G201600",
 ]
 
+PREVIEW_ROWS = 500
+
 
 def read_gene_ids(uploaded_file, manual_input):
     if uploaded_file:
@@ -74,6 +74,85 @@ def read_gene_ids(uploaded_file, manual_input):
     if manual_input.strip():
         return manual_input.strip().splitlines()
     return []
+
+
+def _normalize_gene_token(token):
+    token = str(token or "").strip().lstrip(">").split("|")[0].strip()
+    return re.sub(r"\.\d+$", "", token)
+
+
+def preprocess_gene_ids(uploaded_file=None, manual_input="", raw_items=None):
+    """
+    统一清洗批量基因输入：支持换行、逗号、分号和空白分隔，去重并保留顺序。
+    """
+    if raw_items is None:
+        if uploaded_file:
+            text = uploaded_file.read().decode("utf-8-sig", errors="replace")
+        else:
+            text = manual_input or ""
+        raw_items = re.split(r"[\s,;，；]+", text)
+
+    clean_gene_ids = []
+    seen = set()
+    empty_count = 0
+    duplicate_count = 0
+    normalized_count = 0
+
+    for item in raw_items:
+        raw = str(item or "").strip()
+        if not raw:
+            empty_count += 1
+            continue
+        cleaned = _normalize_gene_token(raw)
+        if not cleaned:
+            empty_count += 1
+            continue
+        if cleaned != raw.lstrip(">").split("|")[0].strip():
+            normalized_count += 1
+        if cleaned in seen:
+            duplicate_count += 1
+            continue
+        seen.add(cleaned)
+        clean_gene_ids.append(cleaned)
+
+    info = {
+        "empty_count": empty_count,
+        "duplicate_count": duplicate_count,
+        "normalized_count": normalized_count,
+    }
+    return clean_gene_ids, info
+
+
+def show_input_cleanup_notice(info):
+    messages = []
+    if info.get("duplicate_count", 0):
+        messages.append(f"已去除重复输入 {info['duplicate_count']} 个")
+    if info.get("normalized_count", 0):
+        messages.append(f"已温和去除 transcript 后缀 {info['normalized_count']} 个")
+    if messages:
+        st.caption("；".join(messages) + "。")
+
+
+def show_dataframe_preview(df, label="结果表", preview_rows=PREVIEW_ROWS, key=None):
+    """
+    大表默认只预览前 N 行，完整数据仍用于下载。
+    """
+    if df is None or df.empty:
+        st.dataframe(df, use_container_width=True)
+        return
+
+    total_rows = len(df)
+    if total_rows <= preview_rows:
+        st.dataframe(df, use_container_width=True)
+        return
+
+    st.caption(f"{label} 共 {total_rows} 行，当前仅预览前 {preview_rows} 行；完整结果请下载。")
+    show_all = st.checkbox(
+        f"显示完整{label}",
+        value=False,
+        key=key or f"show_all_{label}_{total_rows}",
+    )
+    st.dataframe(df if show_all else df.head(preview_rows), use_container_width=True)
 
 
 def as_text(items):
@@ -186,6 +265,8 @@ def run_cached_go_enrichment(
     max_size,
     padj_cutoff,
 ):
+    from utils.go_enrichment import run_go_enrichment
+
     return run_go_enrichment(
         gene_list=list(gene_ids),
         term2gene_path=term2gene_path,
@@ -208,6 +289,8 @@ def run_cached_kegg_enrichment(
     max_size,
     pvalue_cutoff,
 ):
+    from utils.kegg_enrichment import run_kegg_enrichment
+
     return run_kegg_enrichment(
         gene_list=list(gene_ids),
         gene2ko_path=gene2ko_path,

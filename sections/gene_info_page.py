@@ -1,8 +1,18 @@
+import time
+
 import pandas as pd
 import streamlit as st
 
-from app_shared import EXAMPLE_CS_GENES, as_text, read_gene_ids, render_example_tools, show_large_input_notice
-from utils.db_query import get_gene_annotation, get_gene_core, get_primary_gene_id
+from app_shared import (
+    EXAMPLE_CS_GENES,
+    as_text,
+    preprocess_gene_ids,
+    render_example_tools,
+    show_dataframe_preview,
+    show_input_cleanup_notice,
+    show_large_input_notice,
+)
+from utils.db_query import get_gene_annotations_many, get_gene_core_many, resolve_primary_gene_ids_many
 
 
 def render():
@@ -21,37 +31,45 @@ def render():
     )
     manual_input = st.text_area("或者手动输入基因号（每行一个）", key="input_gene_info")
 
-    gene_ids = [g.strip() for g in read_gene_ids(uploaded_file, manual_input) if g.strip()]
+    gene_ids, cleanup_info = preprocess_gene_ids(uploaded_file, manual_input)
     if not gene_ids:
         st.info("请上传文件或输入基因号")
         st.stop()
+    show_input_cleanup_notice(cleanup_info)
 
     st.info(f"待查询基因数：{len(gene_ids)}")
     show_large_input_notice(len(gene_ids), task_name="基因功能注释查询", threshold=500)
 
     if st.button("开始查询", key="btn_gene_info"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        started_at = time.perf_counter()
         results = []
 
-        for idx, input_gene_id in enumerate(gene_ids, 1):
-            status_text.text(f"正在查询：{input_gene_id} ({idx}/{len(gene_ids)})")
+        with st.spinner("正在批量查询基因功能注释，请稍候..."):
+            id_map = resolve_primary_gene_ids_many(tuple(gene_ids))
+            anno_df = get_gene_annotations_many(tuple(gene_ids))
+            core_df = get_gene_core_many(tuple(gene_ids))
 
-            primary_gene_id = get_primary_gene_id(input_gene_id)
-            anno_df = get_gene_annotation(input_gene_id)
-            core_df = get_gene_core(input_gene_id)
+        anno_by_input = {
+            row["input_gene_id"]: row
+            for _, row in anno_df.drop_duplicates("input_gene_id").iterrows()
+        } if not anno_df.empty else {}
+        core_by_input = {
+            row["input_gene_id"]: row
+            for _, row in core_df.drop_duplicates("input_gene_id").iterrows()
+        } if not core_df.empty else {}
 
-            third_id = None
-            description_en = None
-            description_zh = None
+        missing_genes = []
+        for input_gene_id in gene_ids:
+            primary_gene_id = id_map.get(input_gene_id)
+            anno_row = anno_by_input.get(input_gene_id)
+            core_row = core_by_input.get(input_gene_id)
 
-            if not anno_df.empty:
-                description_en = anno_df.iloc[0].get("description_en", None)
-                description_zh = anno_df.iloc[0].get("description_zh", None)
+            third_id = core_row.get("gene_id_v3", None) if core_row is not None else None
+            description_en = anno_row.get("description_en", None) if anno_row is not None else None
+            description_zh = anno_row.get("description_zh", None) if anno_row is not None else None
 
-            if not core_df.empty:
-                third_id = core_df.iloc[0].get("gene_id_v3", None)
-
+            if primary_gene_id is None:
+                missing_genes.append(input_gene_id)
             results.append([
                 input_gene_id,
                 primary_gene_id if primary_gene_id is not None else "未找到",
@@ -60,21 +78,19 @@ def render():
                 description_zh if pd.notna(description_zh) else "",
             ])
 
-            progress_bar.progress(idx / len(gene_ids))
-
         df = pd.DataFrame(
             results,
             columns=["输入基因号", "统一主键", "三代基因号", "功能描述（英文）", "功能描述（中文）"],
         )
 
         st.success("查询完成")
-        st.dataframe(df, use_container_width=True)
+        st.caption(f"查询用时：{time.perf_counter() - started_at:.2f} 秒")
+        show_dataframe_preview(df, label="基因功能注释结果", key="show_all_gene_info")
         st.download_button(
             "下载结果 CSV",
             df.to_csv(index=False).encode("utf-8-sig"),
             "gene_info_from_sqlite.csv",
             "text/csv",
         )
-
-        status_text.empty()
-        progress_bar.empty()
+        if missing_genes:
+            st.warning(f"以下基因未找到: {', '.join(missing_genes)}")
