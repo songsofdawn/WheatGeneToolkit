@@ -66,6 +66,28 @@ def _txt_download(series: pd.Series) -> bytes:
     return ("\n".join(values) + ("\n" if values else "")).encode("utf-8")
 
 
+def _significant_deg_table(volcano_df: pd.DataFrame) -> pd.DataFrame:
+    sig_df = volcano_df.loc[
+        volcano_df["regulation"].isin(["Up-regulated", "Down-regulated"])
+    ].copy()
+    if sig_df.empty:
+        return sig_df
+
+    sig_df.insert(
+        1,
+        "direction",
+        sig_df["regulation"].map({
+            "Up-regulated": "UP",
+            "Down-regulated": "DOWN",
+        }),
+    )
+    sig_df = sig_df.sort_values(
+        ["direction", "pvalue", "log2FC"],
+        ascending=[False, True, False],
+    )
+    return sig_df.reset_index(drop=True)
+
+
 def render():
     st.header("火山图分析 Volcano Plot")
     st.caption("本模块用于根据差异表达结果表绘制火山图。输入表格只需要包含 log₂FC 和 p-value 两列；gene_id 列可选，用于下载基因列表和标注。")
@@ -244,17 +266,31 @@ def render():
             mime="image/png",
         )
 
-        st.subheader("清洗后的结果表")
-        show_dataframe_preview(volcano_df, label="清洗后的火山图结果", key="show_all_volcano_result")
-
         up_genes = volcano_df.loc[volcano_df["regulation"] == "Up-regulated", "gene_id"]
         down_genes = volcano_df.loc[volcano_df["regulation"] == "Down-regulated", "gene_id"]
         sig_genes = volcano_df.loc[volcano_df["regulation"].isin(["Up-regulated", "Down-regulated"]), "gene_id"]
+        significant_deg_df = _significant_deg_table(volcano_df)
+
+        st.subheader("显著差异基因结果表（UP / DOWN）")
+        if significant_deg_df.empty:
+            st.warning("当前阈值下没有显著上调或下调基因。")
+        else:
+            show_dataframe_preview(
+                significant_deg_df,
+                label="显著差异基因结果（UP / DOWN）",
+                key="show_all_volcano_significant_result",
+            )
 
         st.download_button(
-            "下载清洗后的 volcano result CSV",
+            "下载显著差异基因结果表 CSV",
+            data=significant_deg_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name="volcano_significant_up_down_degs.csv",
+            mime="text/csv",
+        )
+        st.download_button(
+            "下载完整清洗结果表 CSV",
             data=volcano_df.to_csv(index=False).encode("utf-8-sig"),
-            file_name="volcano_result_cleaned.csv",
+            file_name="volcano_result_cleaned_full.csv",
             mime="text/csv",
         )
         st.download_button(
